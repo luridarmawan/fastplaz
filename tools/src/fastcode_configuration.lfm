@@ -28,6 +28,8 @@ object fFastCodeConfiguration: TfFastCodeConfiguration
     Height = 28
     Top = 56
     Width = 448
+    EchoMode = emPassword
+    PasswordChar = '*'
     TabOrder = 1
   end
   object Label2: TLabel
@@ -43,7 +45,7 @@ object fFastCodeConfiguration: TfFastCodeConfiguration
     Height = 28
     Top = 192
     Width = 190
-    TabOrder = 2
+    TabOrder = 4
   end
   object Label3: TLabel
     Left = 16
@@ -58,7 +60,7 @@ object fFastCodeConfiguration: TfFastCodeConfiguration
     Height = 113
     Top = 234
     Width = 448
-    TabOrder = 3
+    TabOrder = 5
   end
   object Label4: TLabel
     Left = 16
@@ -73,7 +75,7 @@ object fFastCodeConfiguration: TfFastCodeConfiguration
     Height = 28
     Top = 362
     Width = 100
-    TabOrder = 4
+    TabOrder = 6
   end
   object Label5: TLabel
     Left = 280
@@ -88,7 +90,7 @@ object fFastCodeConfiguration: TfFastCodeConfiguration
     Height = 28
     Top = 364
     Width = 100
-    TabOrder = 5
+    TabOrder = 7
   end
   object Label6: TLabel
     Left = 16
@@ -112,7 +114,7 @@ object fFastCodeConfiguration: TfFastCodeConfiguration
     Width = 276
     Caption = '&Test Connection'
     Color = clHotLight
-    TabOrder = 6
+    TabOrder = 2
     OnClick = btnTestConnectionClick
   end
   object Label7: TLabel
@@ -129,7 +131,7 @@ object fFastCodeConfiguration: TfFastCodeConfiguration
     Top = 144
     Width = 444
     ItemHeight = 20
-    TabOrder = 7
+    TabOrder = 3
     Text = 'cbbModel'
   end
   object Panel1: TPanel
