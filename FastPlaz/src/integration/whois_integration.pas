@@ -29,9 +29,6 @@ unit whois_integration;
 interface
 
 uses
-  {$IFNDEF Windows}
-  cthreads,
-  {$ENDIF}
   logutil_lib,
   Sockets, RegExpr, fpjson, common,
   {$if FPC_FULlVERSION >= 30200}
