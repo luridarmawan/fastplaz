@@ -22,3 +22,4 @@ Instalasi
 Package Opsional
 ---
 * `tools/fastplaz_extras.lpk` — library hash (DCPcrypt: SHA1, SHA256, SHA512, Base64) dan unit `hash_tools`. Dibutuhkan oleh modul CMS (`FastPlaz/src/cms`). Compile saja bila diperlukan, tidak perlu di-install ke IDE.
+* `tools/fastplaz_components.lpk` — komponen `TRemoteDataset` (dataset dari REST endpoint FastPlaz). Butuh `fastplaz_runtime`; compile lalu *install* agar komponennya muncul di palette `FastPlaz`.

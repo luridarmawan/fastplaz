@@ -28,7 +28,7 @@
 for more information visit https://www.fastplaz.com
 "/>
     <Version Major="1" Release="1" Build="145"/>
-    <Files Count="50">
+    <Files Count="49">
       <Item1>
         <Filename Value="..\FastPlaz\src\library\thread_custom.pas"/>
         <UnitName Value="thread_custom"/>
@@ -215,21 +215,17 @@ for more information visit https://www.fastplaz.com
         <UnitName Value="config_lib"/>
       </Item46>
       <Item47>
-        <Filename Value="..\FastPlaz\src\library\http_lib.pas"/>
-        <UnitName Value="http_lib"/>
-      </Item47>
-      <Item48>
         <Filename Value="..\FastPlaz\src\library\regexpr_lib.pas"/>
         <UnitName Value="regexpr_lib"/>
-      </Item48>
-      <Item49>
+      </Item47>
+      <Item48>
         <Filename Value="..\FastPlaz\src\library\regexpr_unicodedata_lib.pas"/>
         <UnitName Value="regexpr_unicodedata_lib"/>
-      </Item49>
-      <Item50>
+      </Item48>
+      <Item49>
         <Filename Value="src\regex_tester_lib.pas"/>
         <UnitName Value="regex_tester_lib"/>
-      </Item50>
+      </Item49>
     </Files>
     <CompatibilityMode Value="True"/>
     <i18n>
