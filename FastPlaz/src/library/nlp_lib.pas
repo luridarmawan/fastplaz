@@ -35,7 +35,7 @@ type
     function similarityCosine(AText, AReference: string): double;
   public
     constructor Create;
-    destructor Destroy;
+    destructor Destroy; override;
     function Similarity(AText, AReference: string;
       AMethod: TNLPSimilarityMethod = smCosine): double;
     function IsStopWords(AWord: string): boolean;
@@ -61,6 +61,7 @@ end;
 destructor TNLP.Destroy;
 begin
   FStopWords.Free;
+  inherited Destroy;
 end;
 
 function TNLP.similarityCosine(AText, AReference: string): double;

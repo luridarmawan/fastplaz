@@ -23,9 +23,6 @@ unit kamuskemdikbud_integration;
 interface
 
 uses
-  {$IFNDEF Windows}
-  cthreads,
-  {$ENDIF}
   common, http_lib,
   {$if FPC_FULlVERSION >= 30200}
   opensslsockets,

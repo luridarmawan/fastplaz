@@ -28,7 +28,7 @@ type
     FURL: string;
   public
     constructor Create;
-    destructor Destroy;
+    destructor Destroy; override;
     function SendExample(FileName: string; Public_Id: string = ''): IHTTPResponse;
   published
     property URL: string read FURL write FURL;

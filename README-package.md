@@ -18,3 +18,7 @@ Instalasi
 ---
 1. open file 'tools/fastplaz_runtime.lpk', then compile
 2. open file 'tools/fastplaz_tools.lpk', then compile and install
+
+Package Opsional
+---
+* `tools/fastplaz_extras.lpk` — library hash (DCPcrypt: SHA1, SHA256, SHA512, Base64) dan unit `hash_tools`. Dibutuhkan oleh modul CMS (`FastPlaz/src/cms`). Compile saja bila diperlukan, tidak perlu di-install ke IDE.
