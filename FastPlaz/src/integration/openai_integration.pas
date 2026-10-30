@@ -33,6 +33,9 @@ uses
 {$ifdef OPENAI_INTEGRATION}
 {$endif}
 
+const
+  OPENAI_BASEURL = 'https://api.openai.com/v1/';
+
 type
 
   { TOpenAIIntegration }
@@ -56,6 +59,7 @@ type
     constructor Create;
     destructor Destroy;
     function ChatCompletion(APrompt: string; ARole: string = 'user'): boolean;
+    function ListModels(AModels: TStrings): boolean;
   published
     property Messages: TJSONArray read FMessages write FMessages;
     property BaseURL: string read FBaseURL write FBaseURL;
@@ -70,7 +74,6 @@ type
 implementation
 
 const
-  OPENAI_BASEURL = 'https://api.openai.com/v1/';
   OPENAI_MODEL_DEFAULT = 'gpt-3.5-turbo';
   OPENAI_TEMPERATURE_DEFAULT = 0;
   OPENAI_MAXTOKEN_DEFAULT = 250;
@@ -84,7 +87,7 @@ var
 function TOpenAIIntegration.isPermitted: boolean;
 begin
   Result := False;
-  if FKey.IsEmpty then Exit;
+  if FKey.IsEmpty and (FBaseURL = OPENAI_BASEURL) then Exit;
 
   Result := True
 end;
@@ -137,7 +140,8 @@ begin
   begin
     OnSyncStatus := FOnSyncStatus;
     AddHeader('_source', 'carik');
-    AddHeader('Authorization', 'Bearer ' + FKey);
+    if not FKey.IsEmpty then
+      AddHeader('Authorization', 'Bearer ' + FKey);
     ContentType := 'application/json';
     RequestBody := TStringStream.Create(Payload.AsJSON);
     HttpResult := Post;
@@ -156,5 +160,50 @@ begin
 
 end;
 
+
+function TOpenAIIntegration.ListModels(AModels: TStrings): boolean;
+var
+  url: string;
+  json, dataArray, idNode: TJSONData;
+  i: integer;
+begin
+  Result := False;
+  AModels.Clear;
+  url := FBaseURL + 'models';
+
+  with THTTPLib.Create(url) do
+  begin
+    OnSyncStatus := FOnSyncStatus;
+    AddHeader('_source', 'carik');
+    if not FKey.IsEmpty then
+      AddHeader('Authorization', 'Bearer ' + FKey);
+    HttpResult := Get;
+    HttpResultAsText := HttpResult.ResultText;
+    Free;
+  end;
+
+  if HttpResult.ResultCode <> 200 then Exit;
+  try
+    json := GetJSON(HttpResultAsText, False);
+  except
+    Exit;
+  end;
+  if json = nil then Exit;
+  try
+    dataArray := json.FindPath('data');
+    if (dataArray <> nil) and (dataArray.JSONType = jtArray) then
+    begin
+      for i := 0 to dataArray.Count - 1 do
+      begin
+        idNode := dataArray.Items[i].FindPath('id');
+        if idNode <> nil then
+          AModels.Add(idNode.AsString);
+      end;
+      Result := True;
+    end;
+  finally
+    json.Free;
+  end;
+end;
 
 end.
