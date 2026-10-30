@@ -225,7 +225,8 @@ type
       SkipStreaming: boolean = False);
     function FindModule(ModuleClass: TCustomHTTPModuleClass): TCustomHTTPModule;
     procedure AddLog(Message: string);
-    procedure DieRaise(const Fmt: string; const Args: array of const);
+    procedure DieRaise(const Fmt: string; const Args: array of const;
+      ACode: integer = 200);
   end;
 
   { TGET }
@@ -353,7 +354,7 @@ begin
   if AppData.func = '' then
     AppData.func := 'main';
   try
-    AppData.SessionID := TMyCustomWebModule(Sender).Session.SessionID;
+    AppData.SessionID := SessionController.SessionID;
   except
   end;
 
@@ -385,27 +386,21 @@ begin
       ExtractFilePath(GetEnvironmentVariable('SCRIPT_NAME'));
   end;
 
-  AppData.hitStorage := string(Config.GetValue(_SYSTEM_HIT_STORAGE, ''));
-  try
-    if AppData.hitStorage <> '' then
-    begin
-      if AppData.hitStorage = 'file' then
-        ThemeUtil.HitType := htFile;
-      if AppData.hitStorage = 'database' then
-        ThemeUtil.HitType := htDatabase;
-      if AppData.hitStorage = 'sqlite' then
-        ThemeUtil.HitType := htSQLite;
-    end;
-  except
-    on e: Exception do
-    begin
-      LogUtil.add(E.Message, 'hitstorage-init');
-    end;
-  end;
-
   if AppData.themeEnable then
   begin
     ThemeUtil := TThemeUtil.Create;
+  end;
+
+  // hit storage must be configured after ThemeUtil exists
+  // (TThemeUtil.Create resets HitType to htNone)
+  AppData.hitStorage := string(Config.GetValue(_SYSTEM_HIT_STORAGE, ''));
+  if (AppData.hitStorage <> '') and Assigned(ThemeUtil) then
+  begin
+    case AppData.hitStorage of
+      'file': ThemeUtil.HitType := htFile;
+      'database': ThemeUtil.HitType := htDatabase;
+      'sqlite': ThemeUtil.HitType := htSQLite;
+    end;
   end;
 
   //-- session
@@ -432,6 +427,9 @@ begin
       Path := '/';
       if not AppData.cookiePath.IsEmpty then
         Path := AppData.cookiePath;
+      HttpOnly := True;
+      SameSite := ssLax;
+      Secure := (GetEnvironmentVariable('HTTPS') = 'on');
       //Expires := dateutils.IncMinute(Now, SessionController.TimeOut);
     end;
   end;
@@ -469,12 +467,20 @@ begin
   if FlashMessage <> '' then
     ThemeUtil.FlashMessages := FlashMessage;
   Application.Response.Content := '';
-  //Application.Response.SendRedirect(URL);
-  //Application.Response.SendResponse;
   Application.Response.Code := AStatusCode;
+  case AStatusCode of
+    301: Application.Response.CodeText := 'Moved Permanently';
+    302: Application.Response.CodeText := 'Found';
+    303: Application.Response.CodeText := 'See Other';
+    307: Application.Response.CodeText := 'Temporary Redirect';
+    308: Application.Response.CodeText := 'Permanent Redirect';
+  end;
   Application.Response.Location := URL;
-  Application.Response.SendHeaders;
-  Application.Destroy;
+  // send the (empty) response now so nothing written afterwards is appended,
+  // then let fpcgi free Application itself; destroying it here caused a
+  // double free in the unit finalization.
+  Application.Response.SendContent;
+  Application.Terminate;
 end;
 
 
@@ -609,7 +615,7 @@ begin
   if not Assigned(RouteRegexMap) then
     RouteRegexMap := TStringList.Create;
 
-  MethodMap.Values[ModuleName] := Method;
+  MethodMap.Values[ModuleName] := UpperCase(Trim(Method));
   RouteRegexMap.Values[ModuleName] := PatternURL;
 
   //RegisterHTTPModule( ModuleName, ModuleClass, SkipStreaming);
@@ -812,6 +818,7 @@ end;
 
 function TMyCustomWebModule.GetTag(const TagName: string): TTagCallback;
 begin
+  Result := nil;
   if AppData.themeEnable then
     Result := ___TagCallbackMap[TagName];
 end;
@@ -869,10 +876,13 @@ end;
 
 procedure TMyCustomWebModule.HandleRequest(ARequest: TRequest; AResponse: TResponse);
 var
-  moduleName, methodDefault: string;
+  moduleName, methodDefault, requestMethod: string;
 begin
   moduleName := FastPlasAppandler.GetActiveModuleName(ARequest);
-  methodDefault := MethodMap.Values[moduleName];
+  methodDefault := UpperCase(MethodMap.Values[moduleName]);
+  requestMethod := UpperCase(ARequest.Method);
+  if requestMethod = HEAD then
+    requestMethod := METHOD_GET;
   {$ifdef DEBUG}
   if ((AppData.debug) and (AppData.debugLevel <= 1)) then
     LogUtil.Add('handle request: mod=' + moduleName, 'init');
@@ -899,7 +909,7 @@ begin
   end
   else
   begin
-    if Application.Request.Method = methodDefault then
+    if requestMethod = methodDefault then
     begin
       AppData.isReady := True;
       inherited HandleRequest(ARequest, AResponse);
@@ -910,7 +920,9 @@ begin
       if ((AppData.debug) and (AppData.debugLevel <= 1)) then
         LogUtil.Add('handle request: ' + __(__Err_Http_InvalidMethod), 'init');
       {$endif}
-      FastPlasAppandler.DieRaise(__(__Err_Http_InvalidMethod), []);
+      AResponse.SetCustomHeader('Allow', methodDefault);
+      AResponse.CodeText := 'Method Not Allowed';
+      FastPlasAppandler.DieRaise(__(__Err_Http_InvalidMethod), [], 405);
     end;
   end;
 end;
@@ -921,8 +933,8 @@ begin
   //AResponse.Content:= __Result_Default_Handler;
   AResponse.Content := '';
 
-  case ARequest.Method of
-    'GET':
+  case UpperCase(ARequest.Method) of
+    'GET', 'HEAD':
     begin
       Get;
     end;
@@ -1046,7 +1058,8 @@ begin
     if Result = '' then
       Result := _GET[variable];
   end;
-  Result := _CleanVar(Result);
+  // _GET/_POST already apply Sanitize/XSSProof; cleaning again here
+  // escaped the value twice.
 end;
 
 { TPOST }
@@ -1060,6 +1073,7 @@ function TPOST.GetValue(const Variable: string): string;
 var
   i: integer;
   _l: TStringList;
+  reg: TRegExpr;
   s, postType: string;
 begin
   Result := '';
@@ -1092,24 +1106,21 @@ begin
       begin
         s := Application.Request.ContentFields.Values[Variable];
         if s.IsEmpty then
-        with TRegExpr.Create() do
         begin
-          Expression := REGEX_FORMDATA;
-          if Exec(RegExprString(Application.Request.Content)) then
-          begin
-            if string(Match[1]) = Variable then
-            begin
-              Result := string(Match[3]); Free; Exit;
-            end;
-            while ExecNext() do
-            begin
-              if string(Match[1]) = Variable then
+          reg := TRegExpr.Create;
+          try
+            reg.Expression := REGEX_FORMDATA;
+            if reg.Exec(RegExprString(Application.Request.Content)) then
+            repeat
+              if string(reg.Match[1]) = Variable then
               begin
-                Result := string(Match[3]); Free; Exit;
+                Result := string(reg.Match[3]);
+                Exit;
               end;
-            end;
+            until not reg.ExecNext;
+          finally
+            reg.Free;
           end;
-          Free;
         end;
         if StringsExists('\[\]', Variable) then
         begin
@@ -1441,8 +1452,9 @@ begin
       else
         M := MC.Create(Self);
       M.Name := ModuleName;
-      Result := TMyCustomWebModule(M);
     end;
+    if m is TMyCustomWebModule then
+      Result := TMyCustomWebModule(m);
   end;
 end;
 
@@ -1492,9 +1504,10 @@ begin
   LogUtil.Add(Message);
 end;
 
-procedure TFastPlasAppandler.DieRaise(const Fmt: string; const Args: array of const);
+procedure TFastPlasAppandler.DieRaise(const Fmt: string; const Args: array of const;
+  ACode: integer);
 begin
-  Die('<div class="warning">' + Format(Fmt, Args) + '</div>');
+  Die('<div class="warning">' + Format(Fmt, Args) + '</div>', ACode);
 end;
 
 initialization
@@ -1516,6 +1529,7 @@ initialization
   _SESSION := TSESSION.Create;
   _SERVER := TSERVER.Create;
   MethodMap := TStringList.Create;
+  RouteRegexMap := TStringList.Create;
 
 finalization
   FreeAndNil(RouteRegexMap);

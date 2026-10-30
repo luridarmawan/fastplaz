@@ -1779,6 +1779,12 @@ begin
     ReplaceText := '<!--'+TagString+'-->';
     Exit;
   end;
+  // tag diawali "!" diabaikan, contoh: [!include file=includes/header.html]
+  if Pos( '!', TagString) = 1 then
+  begin
+    ReplaceText := '';
+    Exit;
+  end;
   if Pos( '|', TagString) = 0 then
   begin
     tagstring_custom := ExplodeTags( TagString);
