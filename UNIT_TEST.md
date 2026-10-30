@@ -15,6 +15,7 @@ Each test project is a standalone console program, so it can be run without inst
 | Project | Location | What is tested |
 | --- | --- | --- |
 | `regex_tester_test` | `tools/src/test` | `regex_tester_lib` – logic behind the *Regex Tester* tool and the `REGEX_*` constants |
+| `fastplaz_test` | `FastPlaz/test` | `datetime_lib` – `DateTimeHuman()`, `DateTimeHumanAt()` and the date string parser `TryParseHumanDate()` |
 
 ### Prerequisites
 
@@ -30,12 +31,14 @@ Windows (can be called from any directory):
 
 ```bat
 tools\src\test\run_tests.bat
+FastPlaz\test\run_tests.bat
 ```
 
 Linux / macOS:
 
 ```bash
 sh tools/src/test/run_tests.sh
+sh FastPlaz/test/run_tests.sh
 ```
 
 Without arguments all tests are run (`-a`). Runner options can be passed directly, for example:
@@ -51,6 +54,7 @@ Notes:
 * `-B` is always used, because the `instantfpc` cache only checks the main program (`.lpr`); without it changes in other units would not be recompiled.
 * The compiled program is stored in the `instantfpc` cache (`instantfpc --get-cache`), not in the repository.
 * On Windows, if `instantfpc` is not in `PATH`, `run_tests.bat` uses `C:\lazarus\fpc\3.2.2\bin\x86_64-win64`.
+* `FastPlaz/test/run_tests.*` adds the unit paths of the `fastplaz_runtime` package, because `datetime_lib` depends on `language_lib` and `common`.
 
 ### Build
 
@@ -67,6 +71,8 @@ Linux / macOS (`lazbuild` in `PATH`):
 cd tools/src/test
 lazbuild regex_tester_test.lpi
 ```
+
+The same applies to `FastPlaz/test/fastplaz_test.lpi`. That project requires the `fastplaz_runtime` package (`tools/fastplaz_runtime.lpk`), which has to be known to Lazarus / `lazbuild`; register it once with `lazbuild --add-package-link tools/fastplaz_runtime.lpk` if it is not.
 
 Compiled units go to `lib/<cpu>-<os>/`. Build output is ignored by `.gitignore`.
 
@@ -108,14 +114,14 @@ The program exits with code `0` when all tests pass and a non-zero code when a t
 
 ### Running from the Lazarus IDE
 
-1. Open `tools/src/test/regex_tester_test.lpi` (*Project → Open Project*).
+1. Open `tools/src/test/regex_tester_test.lpi` or `FastPlaz/test/fastplaz_test.lpi` (*Project → Open Project*).
 2. Set the parameter in *Run → Run Parameters* → *Command line parameters*: `-a`.
 3. Press **F9**.
 
 ### Adding a new test
 
 1. Put the logic to be tested in a unit **without** dependencies on LCL forms or the IDE (`IDEIntf`, `PackageIntf`, …), for example `xxx_lib.pas`.
-2. Create a test unit in `tools/src/test`, e.g. `test_xxx_lib.pas`:
+2. Create a test unit next to the matching test project (`tools/src/test` for the Lazarus tools, `FastPlaz/test` for the framework library), e.g. `test_xxx_lib.pas`:
 
    ```pascal
    unit test_xxx_lib;
@@ -161,6 +167,7 @@ Setiap project test adalah program console mandiri, sehingga bisa dijalankan tan
 | Project | Lokasi | Yang diuji |
 | --- | --- | --- |
 | `regex_tester_test` | `tools/src/test` | `regex_tester_lib` – logika di balik tool *Regex Tester* dan konstanta `REGEX_*` |
+| `fastplaz_test` | `FastPlaz/test` | `datetime_lib` – `DateTimeHuman()`, `DateTimeHumanAt()` dan parser string tanggal `TryParseHumanDate()` |
 
 ### Prasyarat
 
@@ -176,12 +183,14 @@ Windows (bisa dipanggil dari direktori mana saja):
 
 ```bat
 tools\src\test\run_tests.bat
+FastPlaz\test\run_tests.bat
 ```
 
 Linux / macOS:
 
 ```bash
 sh tools/src/test/run_tests.sh
+sh FastPlaz/test/run_tests.sh
 ```
 
 Tanpa argumen, semua test dijalankan (`-a`). Opsi runner bisa langsung diberikan, contoh:
@@ -197,6 +206,7 @@ Catatan:
 * `-B` selalu dipakai, karena cache `instantfpc` hanya memeriksa program utama (`.lpr`); tanpa `-B` perubahan di unit lain tidak akan di-compile ulang.
 * Program hasil compile disimpan di cache `instantfpc` (`instantfpc --get-cache`), bukan di repositori.
 * Di Windows, jika `instantfpc` tidak ada di `PATH`, `run_tests.bat` memakai `C:\lazarus\fpc\3.2.2\bin\x86_64-win64`.
+* `FastPlaz/test/run_tests.*` menambahkan path unit dari package `fastplaz_runtime`, karena `datetime_lib` bergantung pada `language_lib` dan `common`.
 
 ### Build
 
@@ -213,6 +223,8 @@ Linux / macOS (`lazbuild` ada di `PATH`):
 cd tools/src/test
 lazbuild regex_tester_test.lpi
 ```
+
+Hal yang sama berlaku untuk `FastPlaz/test/fastplaz_test.lpi`. Project itu membutuhkan package `fastplaz_runtime` (`tools/fastplaz_runtime.lpk`) yang harus sudah dikenal oleh Lazarus / `lazbuild`; jika belum, daftarkan sekali dengan `lazbuild --add-package-link tools/fastplaz_runtime.lpk`.
 
 Hasil kompilasi unit disimpan di `lib/<cpu>-<os>/`. Hasil build sudah diabaikan oleh `.gitignore`.
 
@@ -254,13 +266,13 @@ Program keluar dengan kode `0` jika semua test lulus, dan kode selain `0` jika a
 
 ### Menjalankan dari Lazarus IDE
 
-1. Buka `tools/src/test/regex_tester_test.lpi` (*Project → Open Project*).
+1. Buka `tools/src/test/regex_tester_test.lpi` atau `FastPlaz/test/fastplaz_test.lpi` (*Project → Open Project*).
 2. Isi parameter di *Run → Run Parameters* → *Command line parameters*: `-a`.
 3. Tekan **F9**.
 
 ### Menambah test baru
 
 1. Letakkan logika yang akan diuji di unit yang **tidak** bergantung pada form LCL maupun IDE (`IDEIntf`, `PackageIntf`, …), misalnya `xxx_lib.pas`.
-2. Buat unit test di `tools/src/test`, misalnya `test_xxx_lib.pas` (lihat contoh kode di bagian [English](#adding-a-new-test)).
+2. Buat unit test di samping project test yang sesuai (`tools/src/test` untuk tools Lazarus, `FastPlaz/test` untuk library framework), misalnya `test_xxx_lib.pas` (lihat contoh kode di bagian [English](#adding-a-new-test)).
 3. Tambahkan unit tersebut ke `uses` program test (`.lpr`) dan ke project (`.lpi`).
 4. Build dan jalankan ulang.
