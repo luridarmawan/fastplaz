@@ -19,7 +19,7 @@
     </CompilerOptions>
     <Description Value="Integration Package for FastPlaz
 "/>
-    <Version Minor="13" Release="1"/>
+    <Version Major="1" Release="1"/>
     <Files Count="38">
       <Item1>
         <Filename Value="../FastPlaz/src/integration/alquranindonesia_integration.pas"/>
