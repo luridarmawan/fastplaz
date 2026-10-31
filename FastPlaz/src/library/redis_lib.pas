@@ -45,10 +45,14 @@ uses
   blcksock,
   {$endif}
   {$ifdef fpcsocket}
-  Sockets, resolve,
-  {$ifdef unix}
-  UnixType,
+  // WinSock2 / BaseUnix before Sockets so the Sockets names win on a clash
+  {$ifdef windows}
+  WinSock2,
   {$endif}
+  {$ifdef unix}
+  BaseUnix, UnixType,
+  {$endif}
+  Sockets, resolve,
   {$endif}
   Classes, SysUtils;
 
@@ -122,6 +126,7 @@ type
 
     {$ifdef fpcsocket}
     function ResolveAddress(out AAddr: TInetSockAddr): boolean;
+    function ConnectWithTimeout(const AAddr: TInetSockAddr): boolean;
     procedure ApplySocketTimeout;
     {$endif}
     procedure SetSocketError(const AMessage: string);
@@ -168,7 +173,9 @@ type
     procedure FlushAll;
     procedure FlushDB;
     function Info: string;
-    procedure Synch;
+    // never sent a valid command ("SYNCH"); SYNC itself would turn the
+    // connection into a replication stream, so this is now a no-op
+    procedure Synch; deprecated 'SYNCH is not a Redis command, the call does nothing';
 
   end;
 
@@ -405,6 +412,119 @@ begin
   Result := True;
 end;
 
+// connect in non blocking mode and wait at most FTimeOut ms for the result,
+// a plain blocking connect can hang for a minute on a host that never answers
+function TRedisLib.ConnectWithTimeout(const AAddr: TInetSockAddr): boolean;
+var
+  rc, soError: longint;
+  optLen: TSockLen;
+  tv: TTimeVal;
+  writeSet, errorSet: TFDSet;
+  {$ifdef windows}
+  nonBlocking: u_long;
+  {$else}
+  flags: longint;
+  {$endif}
+begin
+  Result := False;
+  if FTimeOut <= 0 then
+  begin
+    Result := fpConnect(FSocket, @AAddr, SizeOf(AAddr)) = 0;
+    if not Result then
+      SetSocketError('cannot connect to ' + FServerAddress + ':' + FPort);
+    Exit;
+  end;
+
+  {$ifdef windows}
+  nonBlocking := 1;
+  if WinSock2.ioctlsocket(FSocket, longint(FIONBIO), nonBlocking) <> 0 then
+  {$else}
+  flags := FpFcntl(FSocket, F_GETFL);
+  if (flags = -1) or (FpFcntl(FSocket, F_SETFL, flags or O_NONBLOCK) = -1) then
+  {$endif}
+  begin
+    SetSocketError('cannot set the socket to non blocking mode');
+    Exit;
+  end;
+
+  if fpConnect(FSocket, @AAddr, SizeOf(AAddr)) <> 0 then
+  begin
+    rc := SocketError;
+    {$ifdef windows}
+    if rc <> WSAEWOULDBLOCK then
+    {$else}
+    if rc <> ESysEINPROGRESS then
+    {$endif}
+    begin
+      FLastError := rc;
+      FLastErrorMessage := 'cannot connect to ' + FServerAddress + ':' + FPort +
+        ' (error ' + IntToStr(rc) + ')';
+      Exit;
+    end;
+
+    tv.tv_sec := FTimeOut div 1000;
+    tv.tv_usec := (FTimeOut mod 1000) * 1000;
+    {$ifdef windows}
+    WinSock2.FD_ZERO(writeSet);
+    WinSock2.FD_SET(FSocket, writeSet);
+    WinSock2.FD_ZERO(errorSet);
+    WinSock2.FD_SET(FSocket, errorSet);
+    rc := WinSock2.select(0, nil, @writeSet, @errorSet, @tv);
+    {$else}
+    fpFD_ZERO(writeSet);
+    fpFD_SET(FSocket, writeSet);
+    fpFD_ZERO(errorSet);
+    fpFD_SET(FSocket, errorSet);
+    rc := fpSelect(FSocket + 1, nil, @writeSet, @errorSet, @tv);
+    {$endif}
+    if rc = 0 then
+    begin
+      {$ifdef windows}
+      FLastError := WSAETIMEDOUT;
+      {$else}
+      FLastError := ESysETIMEDOUT;
+      {$endif}
+      FLastErrorMessage := 'connection to ' + FServerAddress + ':' + FPort +
+        ' timed out after ' + IntToStr(FTimeOut) + ' ms';
+      Exit;
+    end;
+    if rc < 0 then
+    begin
+      SetSocketError('select failed while connecting to ' + FServerAddress + ':' + FPort);
+      Exit;
+    end;
+
+    // the socket is writable or in error, SO_ERROR holds the outcome
+    soError := 0;
+    optLen := SizeOf(soError);
+    if fpgetsockopt(FSocket, SOL_SOCKET, SO_ERROR, @soError, @optLen) <> 0 then
+    begin
+      SetSocketError('cannot read the connect result for ' + FServerAddress + ':' + FPort);
+      Exit;
+    end;
+    if soError <> 0 then
+    begin
+      FLastError := soError;
+      FLastErrorMessage := 'cannot connect to ' + FServerAddress + ':' + FPort +
+        ' (error ' + IntToStr(soError) + ')';
+      Exit;
+    end;
+  end;
+
+  // back to blocking mode, SO_RCVTIMEO/SO_SNDTIMEO handle the timeouts from here
+  {$ifdef windows}
+  nonBlocking := 0;
+  if WinSock2.ioctlsocket(FSocket, longint(FIONBIO), nonBlocking) <> 0 then
+  {$else}
+  if FpFcntl(FSocket, F_SETFL, flags) = -1 then
+  {$endif}
+  begin
+    SetSocketError('cannot set the socket back to blocking mode');
+    Exit;
+  end;
+  Result := True;
+end;
+
 procedure TRedisLib.ApplySocketTimeout;
 var
   {$ifdef windows}
@@ -490,14 +610,13 @@ begin
       SetSocketError('cannot create socket');
       Exit;
     end;
-    ApplySocketTimeout;
-    if fpConnect(FSocket, @addr, SizeOf(addr)) <> 0 then
+    if not ConnectWithTimeout(addr) then
     begin
-      SetSocketError('cannot connect to ' + FServerAddress + ':' + FPort);
       CloseSocket(FSocket);
       FSocket := -1;
       Exit;
     end;
+    ApplySocketTimeout;
     FisConnected := True;
     Result := True;
     {$endif}
@@ -776,7 +895,10 @@ end;
 
 procedure TRedisLib.Synch;
 begin
-  SendString('SYNCH');
+  FLastError := 1;
+  FLastErrorMessage := 'Synch is deprecated: SYNCH is not a Redis command, nothing was sent';
+  FLastMessage := '';
+  FResponType := rrtError;
 end;
 
 function TRedisLib.SendString(Strings: string): string;
