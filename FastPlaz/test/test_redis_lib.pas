@@ -37,8 +37,10 @@ type
     procedure TestBulkPayload;
     procedure TestMasterIsOptional;
     procedure TestConnectRefused;
+    procedure TestConnectTimeout;
     procedure TestSendWithoutAutoConnect;
     procedure TestUnresolvableHost;
+    procedure TestSynchSendsNothing;
   end;
 
   { TRedisLibServerTest }
@@ -250,6 +252,30 @@ begin
   end;
 end;
 
+procedure TRedisLibOfflineTest.TestConnectTimeout;
+var
+  R: TRedisLib;
+  t0: TDateTime;
+  elapsed: int64;
+begin
+  R := TRedisLib.Create;
+  try
+    // 192.0.2.0/24 (TEST-NET-1, RFC 5737) is never routed, the SYN gets no
+    // answer; a blocking connect would hang for the OS default (20 s and more)
+    R.ServerAddress := '192.0.2.1';
+    R.TimeOut := 1000;
+    t0 := Now;
+    AssertFalse('connect must fail', R.Connect);
+    elapsed := MilliSecondsBetween(Now, t0);
+    AssertFalse(R.isConnected);
+    AssertTrue('LastError is set', R.LastError <> 0);
+    AssertTrue('message: ' + R.LastErrorMessage, R.LastErrorMessage <> '');
+    AssertTrue(Format('gave up within 4 s, took %d ms', [elapsed]), elapsed < 4000);
+  finally
+    R.Free;
+  end;
+end;
+
 procedure TRedisLibOfflineTest.TestSendWithoutAutoConnect;
 var
   R: TRedisLib;
@@ -279,6 +305,26 @@ begin
     AssertFalse('connect must fail', R.Connect);
     AssertTrue('LastError is set', R.LastError <> 0);
     AssertTrue('message: ' + R.LastErrorMessage, R.LastErrorMessage <> '');
+  finally
+    R.Free;
+  end;
+end;
+
+procedure TRedisLibOfflineTest.TestSynchSendsNothing;
+var
+  R: TRedisLib;
+begin
+  R := TRedisLib.Create;
+  try
+    R.ServerAddress := '127.0.0.1';
+    R.Port := '1';
+    {$push}{$warn 5043 off} // deprecated symbol, that is the point of the test
+    R.Synch;
+    {$pop}
+    AssertFalse('no connection was opened', R.isConnected);
+    AssertTrue(R.LastError <> 0);
+    AssertTrue(R.ResponType = rrtError);
+    AssertTrue('message mentions SYNCH: ' + R.LastErrorMessage, Pos('SYNCH', R.LastErrorMessage) > 0);
   finally
     R.Free;
   end;
