@@ -339,6 +339,53 @@ begin
   Result := Trim(Result);
 end;
 
+// LANG ends up in file names (locale/*.po, theme cache), so only a plain
+// language code such as "en", "id" or "en_US" is accepted, never a path
+function isValidLanguageCode(const ACode: string): boolean;
+var
+  i: integer;
+begin
+  Result := False;
+  if (Length(ACode) < 2) or (Length(ACode) > 5) then
+    Exit;
+  for i := 1 to Length(ACode) do
+    if not (ACode[i] in ['a'..'z', 'A'..'Z', '_', '-']) then
+      Exit;
+  Result := True;
+end;
+
+// TResponse does not derive CodeText from Code, so a bare "Code := 500"
+// would be sent as "500 OK"; returns '' for codes not listed here
+function HttpStatusText(ACode: integer): string;
+begin
+  case ACode of
+    200: Result := 'OK';
+    201: Result := 'Created';
+    202: Result := 'Accepted';
+    204: Result := 'No Content';
+    301: Result := 'Moved Permanently';
+    302: Result := 'Found';
+    303: Result := 'See Other';
+    304: Result := 'Not Modified';
+    307: Result := 'Temporary Redirect';
+    308: Result := 'Permanent Redirect';
+    400: Result := 'Bad Request';
+    401: Result := 'Unauthorized';
+    403: Result := 'Forbidden';
+    404: Result := 'Not Found';
+    405: Result := 'Method Not Allowed';
+    409: Result := 'Conflict';
+    422: Result := 'Unprocessable Entity';
+    429: Result := 'Too Many Requests';
+    500: Result := 'Internal Server Error';
+    501: Result := 'Not Implemented';
+    502: Result := 'Bad Gateway';
+    503: Result := 'Service Unavailable';
+    else
+      Result := '';
+  end;
+end;
+
 
 procedure InitializeFastPlaz(Sender: TObject);
 var
@@ -477,13 +524,8 @@ begin
     ThemeUtil.FlashMessages := FlashMessage;
   Application.Response.Content := '';
   Application.Response.Code := AStatusCode;
-  case AStatusCode of
-    301: Application.Response.CodeText := 'Moved Permanently';
-    302: Application.Response.CodeText := 'Found';
-    303: Application.Response.CodeText := 'See Other';
-    307: Application.Response.CodeText := 'Temporary Redirect';
-    308: Application.Response.CodeText := 'Permanent Redirect';
-  end;
+  if HttpStatusText(AStatusCode) <> '' then
+    Application.Response.CodeText := HttpStatusText(AStatusCode);
   Application.Response.Location := URL;
   // send the (empty) response now so nothing written afterwards is appended,
   // then let fpcgi free Application itself; destroying it here caused a
@@ -558,13 +600,6 @@ begin
   //  html := (Sender as String);
   if Sender is TStrings then
     html := html + (Sender as TStrings).Text;
-  if Sender is TSimpleModel then
-  begin
-    with (Sender as TSimpleModel) do
-    begin
-
-    end;
-  end;//- TSimpleModel
 
   echo(prefix + html + suffic);
 end;
@@ -596,10 +631,6 @@ procedure TRoute.Add(const ModuleName: string; ModuleClass: TMyCustomWebModuleCl
 var
   moduleNameReal: string;
 begin
-  if isRegex(ModuleName) then
-  begin
-    // next;
-  end;
   moduleNameReal := CleanUrl(ModuleName);
   moduleNameReal := ReplaceAll(moduleNameReal, ['_'], '');
   moduleNameReal := ReplaceAll(moduleNameReal, ['-', '|'], '_');
@@ -665,10 +696,11 @@ end;
 
 procedure TSESSION.SetValue(variable: string; AValue: variant);
 begin
-  SessionController[variable] := AValue;
   if ((VarType(AValue) = varSmallInt) or (VarType(AValue) = varinteger) or
     (VarType(AValue) = varint64)) then
-    SessionController[variable] := i2s(AValue);
+    SessionController[variable] := i2s(AValue)
+  else
+    SessionController[variable] := AValue;
 end;
 
 function TSESSION.ReadDateTime(const variable: string): TDateTime;
@@ -899,7 +931,7 @@ begin
     LogUtil.Add('handle request: mod=' + moduleName, 'init');
   {$endif}
 
-  // CSRF Security
+  //TODO: CSRF Security.
   if isPost then
   begin
     if not HTMLUtil.CheckCSRF(False) then
@@ -979,7 +1011,7 @@ begin
   // add header TimeUsage
   StopTime:= _GetTickCount;
   ElapsedTime:= StopTime - StartTime;
-  Application.Response.SetCustomHeader( 'TimeUsage', i2s( ElapsedTime));;
+  Application.Response.SetCustomHeader( 'TimeUsage', i2s( ElapsedTime));
 
   Handled := True;
 end;
@@ -1015,21 +1047,21 @@ begin
 end;
 
 procedure TMyCustomWebModule.LanguageInit;
+var
+  langCode: string;
 begin
-  if Application.Request.QueryFields.Values['lang'] <> '' then
-    LANG := Application.Request.QueryFields.Values['lang']
-  else
-  begin
-    if _SESSION['lang'] <> '' then
-    begin
-      if Length(_SESSION['lang']) < 5 then
-        LANG := _SESSION['lang'];
-    end
-    else
-      LANG := AppData.language;
-  end;
-  if LANG = 'us' then
-    LANG := 'en';
+  // query string, then session, then the configured default; each one is
+  // validated because LANG is used to build file names
+  langCode := Application.Request.QueryFields.Values['lang'];
+  if not isValidLanguageCode(langCode) then
+    langCode := string(_SESSION['lang']);
+  if not isValidLanguageCode(langCode) then
+    langCode := AppData.language;
+  if not isValidLanguageCode(langCode) then
+    langCode := 'en';
+  if langCode = 'us' then
+    langCode := 'en';
+  LANG := langCode;
   _SESSION['lang'] := LANG;
 end;
 
@@ -1037,6 +1069,8 @@ procedure TMyCustomWebModule.CloseConnection(const AResponseContent: string;
   ACode: Integer);
 begin
   Response.Code := ACode;
+  if HttpStatusText(ACode) <> '' then
+    Response.CodeText := HttpStatusText(ACode);
   Response.Content := AResponseContent;
   CustomHeader['Connection'] := 'close';
   Response.SendContent;
@@ -1089,70 +1123,85 @@ begin
 end;
 
 function TPOST.GetValue(const Variable: string): string;
+
+  function CleanValue(const AValue: string): string;
+  begin
+    if Sanitize then
+    begin
+      Result := _CleanVar(AValue);
+      if XSSProof then
+        Result := StripTags(Result).Trim;
+    end
+    else
+      Result := AValue;
+  end;
+
 var
   i: integer;
   _l: TStringList;
   reg: TRegExpr;
   s, postType: string;
+  found: boolean;
 begin
   Result := '';
   if Application.Request.Method = 'GET' then
     Exit;
   s := '';
+  postType := '';
+  _l := TStringList.Create;
   try
-    _l := TStringList.Create;
     _l.Delimiter := ';';
     _l.StrictDelimiter := True;
     _l.DelimitedText := Application.Request.ContentType;
-    postType := _l[0];
-  except
-    postType := '';
+    if _l.Count > 0 then
+      postType := LowerCase(Trim(_l[0]));
+  finally
+    _l.Free;
   end;
-  FreeAndNil(_l);
   if postType = 'text/plain' then
   begin
+    // raw request body, returned as-is for the caller to parse
     Result := Application.Request.Content;
     Exit;
-  end;
-  if Application.Request.ContentFields.IndexOfName(Variable) = -1 then
-  begin
-    Result := '';
-    //Exit;
   end;
   try
     case postType of
       'multipart/form-data':
       begin
-        s := Application.Request.ContentFields.Values[Variable];
-        if s.IsEmpty then
-        begin
-          reg := TRegExpr.Create;
-          try
-            reg.Expression := REGEX_FORMDATA;
-            if reg.Exec(RegExprString(Application.Request.Content)) then
-            repeat
-              if string(reg.Match[1]) = Variable then
-              begin
-                Result := string(reg.Match[3]);
-                Exit;
-              end;
-            until not reg.ExecNext;
-          finally
-            reg.Free;
-          end;
-        end;
         if StringsExists('\[\]', Variable) then
         begin
-          Result := '';
-          for i:=0 to Application.Request.ContentFields.Count-1 do
+          // name[] : collect every value posted under that name, each one
+          // cleaned on its own so the #13 separator is never escaped
+          for i := 0 to Application.Request.ContentFields.Count - 1 do
           begin
             if Application.Request.ContentFields.Names[i] = Variable then
-            begin
-              Result += Application.Request.ContentFields.ValueFromIndex[i] + #13;
-            end;
+              Result += CleanValue(Application.Request.ContentFields.ValueFromIndex[i]) + #13;
           end;
           Result := Result.Trim;
           Exit;
+        end
+        else
+        begin
+          s := Application.Request.ContentFields.Values[Variable];
+          if s.IsEmpty then
+          begin
+            reg := TRegExpr.Create;
+            try
+              reg.Expression := REGEX_FORMDATA;
+              found := reg.Exec(RegExprString(Application.Request.Content));
+              while found do
+              begin
+                if string(reg.Match[1]) = Variable then
+                begin
+                  s := string(reg.Match[3]);
+                  Break;
+                end;
+                found := reg.ExecNext;
+              end;
+            finally
+              reg.Free;
+            end;
+          end;
         end;
       end;
       'application/x-www-form-urlencoded':
@@ -1162,14 +1211,8 @@ begin
     end;
   except
   end;
-  if Sanitize then
-  begin
-    Result := _CleanVar(s);
-    if XSSProof then
-      Result := StripTags(Result).Trim;
-  end
-  else
-    Result := s;
+  // every single-value field, whichever branch found it, is cleaned here
+  Result := CleanValue(s);
 end;
 
 procedure TPOST.SetValue(const Variable: string; AValue: string);
@@ -1245,6 +1288,7 @@ function TFastPlasAppandler.GetActiveModuleName(Arequest: TRequest): string;
 
   function GetDefaultModuleName: string;
   begin
+    Result := '';
     if (Application.DefaultModuleName <> '') then
       Result := Application.DefaultModuleName
     else if (ModuleFactory.Count = 1) then
@@ -1349,37 +1393,42 @@ begin
     {$ENDIF}
 
     // check with Regex - redefine variable
+    // note: patterns are matched as-is, anchor them with ^...$ in the route
+    // when a prefix match is not wanted
+    reg := TRegExpr.Create;
     try
-      reg := TRegExpr.Create;
-      for i := 0 to RouteRegexMap.Count - 1 do
-      begin
-        reg.Expression := RegExprString(RouteRegexMap.ValueFromIndex[i]);
-        if reg.Exec(RegExprString(pathInfo)) then
+      try
+        for i := 0 to RouteRegexMap.Count - 1 do
         begin
-          s := RouteRegexMap.Names[i];
-          if ModuleFactory.FindModule(S) <> nil then
+          reg.Expression := RegExprString(RouteRegexMap.ValueFromIndex[i]);
+          if reg.Exec(RegExprString(pathInfo)) then
           begin
-            ARequest.QueryFields.Values[Application.ModuleVariable] := s;
-            for j := 1 to reg.SubExprMatchCount do
+            s := RouteRegexMap.Names[i];
+            if ModuleFactory.FindModule(S) <> nil then
             begin
-              ARequest.QueryFields.Values['$' + i2s(j)] := string(reg.Match[j]);
-              if j = 3 then
-                ARequest.QueryFields.Values['act'] := string(reg.Match[j]);
+              ARequest.QueryFields.Values[Application.ModuleVariable] := s;
+              for j := 1 to reg.SubExprMatchCount do
+              begin
+                ARequest.QueryFields.Values['$' + i2s(j)] := string(reg.Match[j]);
+                if j = 3 then
+                  ARequest.QueryFields.Values['act'] := string(reg.Match[j]);
+              end;
+              for j := 1 to reg.GroupCount do
+              begin
+                groupName := string(reg.GroupName[j]);
+                ARequest.QueryFields.Values[groupName] := string(reg.MatchFromName(RegExprString(groupName)));
+              end;
+              Break;
             end;
-            for j := 1 to reg.GroupCount do
-            begin
-              groupName := string(reg.GroupName[j]);
-              ARequest.QueryFields.Values[groupName] := string(reg.MatchFromName(RegExprString(groupName)));
-            end;
-            Break;
           end;
         end;
+      except
+        on E: Exception do
+          die('OnGetModule: ' + E.Message);
       end;
-    except
-      on E: Exception do
-        die('OnGetModule: ' + E.Message);
+    finally
+      reg.Free;
     end;
-    reg.Free;
 
 
     //_Redirect( '/?url='+ copy( ARequest.PathInfo, 2, Length(ARequest.PathInfo)-1) + '&' + ARequest.QueryString );
@@ -1419,10 +1468,18 @@ begin
 end;
 
 procedure TFastPlasAppandler.ExceptionHandler(Sender: TObject; E: Exception);
+var
+  senderName, msg: string;
 begin
-  //Application.ShowException(E);
-  //Application.Terminate;
-  LogUtil.Add(Sender.ClassName + ': ' + E.Message, 'exception');
+  if Assigned(Sender) then
+    senderName := Sender.ClassName
+  else
+    senderName := 'nil';
+  if Assigned(E) then
+    msg := E.Message
+  else
+    msg := 'unknown exception';
+  LogUtil.Add(senderName + ': ' + msg, 'exception');
 end;
 
 function TFastPlasAppandler.Tag_InternalContent_Handler(const TagName: string;
