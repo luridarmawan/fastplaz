@@ -2189,7 +2189,7 @@ end;
 function TThemeUtil.Render(TagProcessorAddress: TReplaceTagEvent; const LayoutTemplateFile: string; Cache: boolean;
   SubModule: boolean): string;
 var
-  templateFilename, _ext, moduleActive: string;
+  templateFilename, _ext, moduleActive, relativeFile: string;
   templateEngine: TFPTemplate;
   response_json : TJSONObject;
 begin
@@ -2235,8 +2235,19 @@ begin
 
     if not FileExists(templateFilename) then
     begin
-      // fallback: path relative to current dir (or absolute)
-      templateFilename := ExpandFileName( LayoutTemplateFile);
+      // fallback: path relative to the web root (current dir).
+      // A leading "/" means "from the web root", not from the drive/fs root,
+      // ex: [include file="/modules/inbox/includes/thread.html"]
+      relativeFile := SetDirSeparators( trim( LayoutTemplateFile));
+      relativeFile := StringReplace( relativeFile, '"', '', [rfReplaceAll]);
+      relativeFile := StringReplace( relativeFile, '''', '', [rfReplaceAll]);
+      while (relativeFile <> '') and (relativeFile[1] = DirectorySeparator) do
+        Delete( relativeFile, 1, 1);
+      templateFilename := IncludeTrailingPathDelimiter( GetCurrentDir) + relativeFile;
+      // last resort: a real absolute path (ex: "D:\..." on Windows)
+      if (not FileExists(templateFilename)) and (ExtractFileDrive( LayoutTemplateFile) <> '')
+        and FileExists( LayoutTemplateFile) then
+        templateFilename := LayoutTemplateFile;
       if not FileExists(templateFilename) then
       begin
         Result := EchoError( __(__Err_Theme_Not_Exists), [ templateFilename, ThemeName]);
