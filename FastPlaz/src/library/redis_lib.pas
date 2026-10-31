@@ -7,7 +7,8 @@ Simple Redis Client Library
 
 by: Luri Darmawan ( http://www.fastplaz.com )
 requirement:
-  - synapse (if any)
+  - none (fpSend/fpRecv from the Sockets unit)
+  - synapse (optional, define SYNAPSE)
 
 USAGE:
 [x] set value
@@ -16,6 +17,10 @@ Redis['thekey'] := 'your string';
 
 [x] get value
 variable := Redis['thekey'];
+
+[x] raw command
+Redis.SendCommand(['HSET', 'user:1', 'name', 'Luri']);  // RESP array, any value is safe
+Redis.SendString('PING');                               // inline command
 
 USE MASTER SLAVE
 Redis := TRedisLib.Create;
@@ -36,11 +41,14 @@ interface
 {$endif}
 
 uses
-  Sockets,
-  {$ifdef fpcsocket}
-  {$endif}
   {$ifdef synapse}
   blcksock,
+  {$endif}
+  {$ifdef fpcsocket}
+  Sockets, resolve,
+  {$ifdef unix}
+  UnixType,
+  {$endif}
   {$endif}
   Classes, SysUtils;
 
@@ -48,11 +56,20 @@ const
   REDIS_DEFAULT_SERVER = '127.0.0.1';
   REDIS_DEFAULT_PORT = 6379;
   REDIS_DEFAULT_TIMEOUT = 2500;
+  REDIS_RECV_CHUNK_SIZE = 8192;
   __REDIS_RESPONSE_SINGLE_CHAR = '+'; // "+OK"
   __REDIS_RESPONSE_ERROR_CHAR = '-'; // error
   __REDIS_RESPONSE_INT_CHAR = ':'; //  ":100\r\n"
   __REDIS_RESPONSE_BULK_CHAR = '$'; // "$7\r\nexample\r\n"
   __REDIS_RESPONSE_MULTI_BULK_CHAR = '*'; // multiple bulk value
+
+  {$ifdef fpcsocket}
+  {$if defined(linux) or defined(android) or defined(freebsd) or defined(openbsd) or defined(netbsd)}
+  REDIS_SEND_FLAGS = MSG_NOSIGNAL; // do not raise SIGPIPE when the server went away
+  {$else}
+  REDIS_SEND_FLAGS = 0;
+  {$endif}
+  {$endif}
 
 type
 
@@ -77,17 +94,17 @@ type
     FResponType: TRedisResponseType;
     FTimeOut: integer;
     FWriteToMaster: boolean;
+    FRedisMaster: TRedisLib;
+    // raw bytes from the server, never passed through a code page conversion
+    FRecvBuffer: RawByteString;
 
     {$ifdef synapse}
     sock: TTCPBlockSocket;
     {$endif}
 
     {$ifdef fpcsocket}
-    sock: TInetSockAddr;
-    sockInt: longint;
-    SocketIn, SocketOut: Text;
+    FSocket: longint;
     {$endif}
-    IpAddress: in_addr;
 
     function Get(Key: string): string;
     function GetMasterPort: string;
@@ -99,8 +116,21 @@ type
     procedure SetMasterTimeOut(AValue: integer);
     procedure SetServerAddress(AValue: string);
     procedure SetPort(AValue: string);
+    procedure SetTimeOut(AValue: integer);
     procedure SetValue(Key: string; AValue: string);
     procedure SetWriteToMaster(AValue: boolean);
+
+    {$ifdef fpcsocket}
+    function ResolveAddress(out AAddr: TInetSockAddr): boolean;
+    procedure ApplySocketTimeout;
+    {$endif}
+    procedure SetSocketError(const AMessage: string);
+    function SocketSend(const AData: RawByteString): boolean;
+    function SocketRecv(out AData: RawByteString): boolean;
+    function ReadLine(out ALine: RawByteString): boolean;
+    function ReadBytes(ACount: integer; out AData: RawByteString): boolean;
+    function ReadReply(out AReply: RawByteString): boolean;
+    function Execute(const ARequest: RawByteString): string;
   public
     constructor Create(const ConfigName: string = 'default');
     destructor Destroy; override;
@@ -109,7 +139,7 @@ type
     property isAutoConnect: boolean read FisAutoConnect write FisAutoConnect;
     property ServerAddress: string read FServerAddress write SetServerAddress;
     property Port: string read FPort write SetPort;
-    property TimeOut: integer read FTimeOut write FTimeOut;
+    property TimeOut: integer read FTimeOut write SetTimeOut;
     property LastError: integer read FLastError;
     property LastErrorMessage: string read FLastErrorMessage;
     property LastMessage: string read FLastMessage;
@@ -125,7 +155,13 @@ type
 
 
     function Connect: boolean;
+    procedure Disconnect;
+    // inline command, e.g. 'PING' or 'GET thekey'
     function SendString(Strings: string): string;
+    // RESP array command, safe for values with spaces, quotes or newlines
+    function SendCommand(const Args: array of string): string;
+    // payload of a bulk reply ("$7"#13#10"example" -> "example")
+    function BulkPayload(const AReply: string): string;
 
     function Auth(PasswordKey: string = ''): boolean;
     function Ping: boolean;
@@ -138,77 +174,120 @@ type
 
 implementation
 
-{ TRedisLib }
+// Append bytes without the "+" operator: when the operands carry different
+// code pages (e.g. a CP_UTF8 literal and a CP_ACP buffer) FPC would convert
+// the data, which changes the bytes and makes the RESP "$<len>" header wrong.
+procedure AppendBytes(var ABuffer: RawByteString; const AData: RawByteString);
 var
-  RedisMaster: TRedisLib;
+  oldLen, dataLen: SizeInt;
+begin
+  dataLen := Length(AData);
+  if dataLen = 0 then
+    Exit;
+  oldLen := Length(ABuffer);
+  SetLength(ABuffer, oldLen + dataLen);
+  if oldLen = 0 then
+    SetCodePage(ABuffer, CP_NONE, False);
+  Move(AData[1], ABuffer[oldLen + 1], dataLen);
+end;
+
+// position of the first CRLF at or after AFrom, 0 when there is none
+function FindCRLF(const ABuffer: RawByteString; AFrom: SizeInt): SizeInt;
+var
+  len, i: SizeInt;
+begin
+  Result := 0;
+  len := Length(ABuffer);
+  if AFrom < 1 then
+    AFrom := 1;
+  i := AFrom;
+  while i < len do
+  begin
+    if (ABuffer[i] = #13) and (ABuffer[i + 1] = #10) then
+      Exit(i);
+    Inc(i);
+  end;
+end;
+
+{ TRedisLib }
 
 procedure TRedisLib.SetServerAddress(AValue: string);
 begin
+  AValue := Trim(AValue);
+  if AValue = '' then
+    AValue := REDIS_DEFAULT_SERVER;
   if FServerAddress = AValue then
     Exit;
   FServerAddress := AValue;
-  IpAddress := StrToNetAddr(AValue);
-  if IpAddress.s_addr = 0 then
-  begin
-    FServerAddress := REDIS_DEFAULT_SERVER;
-    IpAddress := StrToNetAddr(FServerAddress);
-  end;
 end;
 
 procedure TRedisLib.SetPort(AValue: string);
 begin
   if FPort = AValue then
     Exit;
-  try
-    FPortInt := StrToInt(AValue);
-    FPort := AValue;
-  except
+  FPortInt := StrToIntDef(AValue, 0);
+  if (FPortInt < 1) or (FPortInt > 65535) then
+  begin
     FPort := IntToStr(REDIS_DEFAULT_PORT);
     FPortInt := REDIS_DEFAULT_PORT;
-  end;
+  end
+  else
+    FPort := AValue;
+end;
+
+procedure TRedisLib.SetTimeOut(AValue: integer);
+begin
+  if FTimeOut = AValue then
+    Exit;
+  FTimeOut := AValue;
+  {$ifdef fpcsocket}
+  if FisConnected then
+    ApplySocketTimeout;
+  {$endif}
 end;
 
 function TRedisLib.Get(Key: string): string;
-var
-  i: integer;
 begin
+  Result := '';
   if Key.IsEmpty then
     Exit;
-  SendString('GET ' + Key);
-  i := Pos(#13#10, FLastMessage);
-  FLastMessage := Copy(FLastMessage, i + 2, Length(FLastMessage) - i - 1);
-  Result := FLastMessage;
+  SendCommand(['GET', Key]);
+  if FResponType = rrtBulk then
+  begin
+    FLastMessage := BulkPayload(FLastMessage);
+    Result := FLastMessage;
+  end;
 end;
 
 function TRedisLib.GetMasterPort: string;
 begin
-  if FWriteToMaster then
-    Result := RedisMaster.Port;
+  Result := '';
+  if Assigned(FRedisMaster) then
+    Result := FRedisMaster.Port;
 end;
 
 function TRedisLib.GetMasterServerAddress: string;
 begin
-  if FWriteToMaster then
-    Result := RedisMaster.ServerAddress;
+  Result := '';
+  if Assigned(FRedisMaster) then
+    Result := FRedisMaster.ServerAddress;
 end;
 
 function TRedisLib.GetMasterTimeOut: integer;
 begin
-  if FWriteToMaster then
-    Result := RedisMaster.TimeOut;
+  Result := 0;
+  if Assigned(FRedisMaster) then
+    Result := FRedisMaster.TimeOut;
 end;
 
 function TRedisLib.GetResponseType(Response: string): TRedisResponseType;
-var
-  c: char;
 begin
   if Response = '' then
   begin
     Result := rrtUnknown;
     Exit;
   end;
-  c := copy(Response, 1, 1)[1];
-  case c of
+  case Response[1] of
     __REDIS_RESPONSE_SINGLE_CHAR: Result := rrtStatus;
     __REDIS_RESPONSE_ERROR_CHAR: Result := rrtError;
     __REDIS_RESPONSE_BULK_CHAR: Result := rrtBulk;
@@ -217,37 +296,37 @@ begin
     else
       Result := rrtUnknown;
   end;
+  // "$-1" / "*-1": null bulk / null array
+  if (Result in [rrtBulk, rrtMultiBulk]) and (Copy(Response, 2, 2) = '-1') then
+    Result := rrtNull;
 end;
 
 procedure TRedisLib.SetMasterPort(AValue: string);
 begin
-  if FWriteToMaster then
-    RedisMaster.Port := AValue;
+  if Assigned(FRedisMaster) then
+    FRedisMaster.Port := AValue;
 end;
 
 procedure TRedisLib.SetMasterServerAddress(AValue: string);
 begin
-  if FWriteToMaster then
-    RedisMaster.ServerAddress := AValue;
+  if Assigned(FRedisMaster) then
+    FRedisMaster.ServerAddress := AValue;
 end;
 
 procedure TRedisLib.SetMasterTimeOut(AValue: integer);
 begin
-  if FWriteToMaster then
-    RedisMaster.TimeOut := AValue;
+  if Assigned(FRedisMaster) then
+    FRedisMaster.TimeOut := AValue;
 end;
 
 procedure TRedisLib.SetValue(Key: string; AValue: string);
 begin
   if Key.IsEmpty then
     Exit;
-  FLastMessage := '+OK';
-  if FWriteToMaster then
-  begin
-    RedisMaster.SendString('SET ' + Key + ' ''' + AValue + '''');
-  end
+  if FWriteToMaster and Assigned(FRedisMaster) then
+    FRedisMaster.SendCommand(['SET', Key, AValue])
   else
-    SendString('SET ' + Key + ' ''' + AValue + '''');
+    SendCommand(['SET', Key, AValue]);
 end;
 
 procedure TRedisLib.SetWriteToMaster(AValue: boolean);
@@ -257,8 +336,11 @@ begin
   FWriteToMaster := AValue;
   if FWriteToMaster then
   begin
-    RedisMaster := TRedisLib.Create();
-  end;
+    if not Assigned(FRedisMaster) then
+      FRedisMaster := TRedisLib.Create();
+  end
+  else
+    FreeAndNil(FRedisMaster);
 end;
 
 constructor TRedisLib.Create(const ConfigName: string);
@@ -268,80 +350,411 @@ begin
   FPort := IntToStr(REDIS_DEFAULT_PORT);
   FPortInt := REDIS_DEFAULT_PORT;
   FTimeOut := REDIS_DEFAULT_TIMEOUT;
-  ServerAddress := REDIS_DEFAULT_SERVER;
+  FServerAddress := REDIS_DEFAULT_SERVER;
+  FRecvBuffer := '';
+  FRedisMaster := nil;
   {$ifdef synapse}
   sock := TTCPBlockSocket.Create;
+  {$endif}
+  {$ifdef fpcsocket}
+  FSocket := -1;
   {$endif}
 end;
 
 
 destructor TRedisLib.Destroy;
 begin
-  if FisConnected then
-  begin
-    {$ifdef synapse}
-    sock.CloseSocket;
-    {$endif}
-    {$ifdef fpcsocket}
-    Close(SocketOut);
-    {$endif}
-  end;
+  Disconnect;
   {$ifdef synapse}
   FreeAndNil(sock);
   {$endif}
-  if FWriteToMaster then
-  begin
-    FreeAndNil(RedisMaster);
-  end;
+  FreeAndNil(FRedisMaster);
   inherited Destroy;
 end;
 
+{$ifdef fpcsocket}
+function TRedisLib.ResolveAddress(out AAddr: TInetSockAddr): boolean;
+var
+  ip: in_addr;
+  resolver: THostResolver;
+begin
+  Result := False;
+  FillChar(AAddr, SizeOf(AAddr), 0);
+  AAddr.sin_family := AF_INET;
+  AAddr.sin_port := htons(FPortInt);
+
+  ip := StrToNetAddr(FServerAddress);
+  if ip.s_addr = 0 then
+  begin
+    // not a dotted IPv4 literal, try a host name lookup
+    resolver := THostResolver.Create(nil);
+    try
+      if resolver.NameLookup(FServerAddress) then
+        ip := StrToNetAddr(resolver.AddressAsString);
+    finally
+      resolver.Free;
+    end;
+  end;
+  if ip.s_addr = 0 then
+  begin
+    FLastError := 1;
+    FLastErrorMessage := 'cannot resolve host "' + FServerAddress + '"';
+    Exit;
+  end;
+  AAddr.sin_addr.s_addr := ip.s_addr;
+  Result := True;
+end;
+
+procedure TRedisLib.ApplySocketTimeout;
+var
+  {$ifdef windows}
+  tv: longword; // milliseconds
+  {$else}
+  tv: TTimeVal;
+  {$endif}
+  {$ifdef darwin}
+  one: longint;
+  {$endif}
+begin
+  if FSocket = -1 then
+    Exit;
+  {$ifdef darwin}
+  one := 1;
+  fpsetsockopt(FSocket, SOL_SOCKET, SO_NOSIGPIPE, @one, SizeOf(one));
+  {$endif}
+  if FTimeOut <= 0 then
+    Exit;
+  {$ifdef windows}
+  tv := FTimeOut;
+  {$else}
+  tv.tv_sec := FTimeOut div 1000;
+  tv.tv_usec := (FTimeOut mod 1000) * 1000;
+  {$endif}
+  fpsetsockopt(FSocket, SOL_SOCKET, SO_RCVTIMEO, @tv, SizeOf(tv));
+  fpsetsockopt(FSocket, SOL_SOCKET, SO_SNDTIMEO, @tv, SizeOf(tv));
+end;
+{$endif}
+
+procedure TRedisLib.SetSocketError(const AMessage: string);
+begin
+  {$ifdef synapse}
+  FLastError := sock.LastError;
+  if sock.LastErrorDesc <> '' then
+  begin
+    FLastErrorMessage := AMessage + ': ' + sock.LastErrorDesc;
+    if FLastError = 0 then
+      FLastError := 1;
+    Exit;
+  end;
+  {$endif}
+  {$ifdef fpcsocket}
+  FLastError := SocketError;
+  {$endif}
+  if FLastError = 0 then
+    FLastError := 1;
+  FLastErrorMessage := AMessage + ' (error ' + IntToStr(FLastError) + ')';
+end;
+
 function TRedisLib.Connect: boolean;
+{$ifdef fpcsocket}
+var
+  addr: TInetSockAddr;
+{$endif}
 begin
   Result := FisConnected;
   FLastMessage := '';
-  FLastError := 1;
+  FLastError := 0;
+  FLastErrorMessage := '';
   if FisConnected then
     exit;
+  FRecvBuffer := '';
   try
     {$ifdef synapse}
     sock.SocksTimeout := FTimeOut;
     sock.Connect(FServerAddress, FPort);
-    FLastError := sock.LastError;
     if sock.LastError = 0 then
     begin
       FisConnected := True;
       Result := True;
-    end;
+    end
+    else
+      SetSocketError('cannot connect to ' + FServerAddress + ':' + FPort);
     {$endif}
+
     {$ifdef fpcsocket}
-    sockInt := fpSocket(AF_INET, SOCK_STREAM, 0);
-    if sockInt = -1 then
+    if not ResolveAddress(addr) then
       Exit;
-    sock.sin_family := AF_INET;
-    sock.sin_port := htons(FPortInt);
-    sock.sin_addr.s_addr := IpAddress.s_addr;
-    if Sockets.Connect(sockInt, sock, SocketIn, SocketOut) then
+    FSocket := fpSocket(AF_INET, SOCK_STREAM, 0);
+    if FSocket = -1 then
     begin
-      FisConnected := True;
-      Result := True;
-      FLastError := 0;
+      SetSocketError('cannot create socket');
+      Exit;
     end;
+    ApplySocketTimeout;
+    if fpConnect(FSocket, @addr, SizeOf(addr)) <> 0 then
+    begin
+      SetSocketError('cannot connect to ' + FServerAddress + ':' + FPort);
+      CloseSocket(FSocket);
+      FSocket := -1;
+      Exit;
+    end;
+    FisConnected := True;
+    Result := True;
     {$endif}
   except
     on e: Exception do
-      FLastMessage := e.Message;
+    begin
+      FLastError := 1;
+      FLastErrorMessage := e.Message;
+      Disconnect;
+    end;
   end;
 end;
 
-function TRedisLib.Ping: boolean;
+procedure TRedisLib.Disconnect;
+begin
+  {$ifdef synapse}
+  if FisConnected then
+    sock.CloseSocket;
+  {$endif}
+  {$ifdef fpcsocket}
+  if FSocket <> -1 then
+  begin
+    CloseSocket(FSocket);
+    FSocket := -1;
+  end;
+  {$endif}
+  FisConnected := False;
+  FRecvBuffer := '';
+end;
+
+function TRedisLib.SocketSend(const AData: RawByteString): boolean;
+{$ifdef fpcsocket}
 var
-  s: string;
+  sent, total: integer;
+  n: PtrInt;
+{$endif}
 begin
   Result := False;
-  s := SendString('PING');
-  if s = '+PONG' then
-    Result := True;
+  if AData = '' then
+    Exit(True);
+
+  {$ifdef synapse}
+  sock.SendString(AData);
+  if sock.LastError <> 0 then
+  begin
+    SetSocketError('send failed');
+    Disconnect;
+    Exit;
+  end;
+  Result := True;
+  {$endif}
+
+  {$ifdef fpcsocket}
+  total := Length(AData);
+  sent := 0;
+  while sent < total do
+  begin
+    n := fpSend(FSocket, @AData[sent + 1], total - sent, REDIS_SEND_FLAGS);
+    if n <= 0 then
+    begin
+      SetSocketError('send failed');
+      Disconnect;
+      Exit;
+    end;
+    Inc(sent, n);
+  end;
+  Result := True;
+  {$endif}
+end;
+
+function TRedisLib.SocketRecv(out AData: RawByteString): boolean;
+var
+  n: PtrInt;
+begin
+  Result := False;
+  AData := '';
+  SetLength(AData, REDIS_RECV_CHUNK_SIZE);
+  SetCodePage(AData, CP_NONE, False);
+
+  {$ifdef synapse}
+  // whatever is waiting on the socket, or an error after FTimeOut
+  AData := sock.RecvPacket(FTimeOut);
+  if sock.LastError <> 0 then
+  begin
+    SetSocketError('receive failed');
+    Disconnect;
+    AData := '';
+    Exit;
+  end;
+  n := Length(AData);
+  if n > 0 then
+    SetCodePage(AData, CP_NONE, False);
+  Result := n > 0;
+  {$endif}
+
+  {$ifdef fpcsocket}
+  n := fpRecv(FSocket, @AData[1], Length(AData), 0);
+  if n <= 0 then
+  begin
+    if n = 0 then
+    begin
+      FLastError := 1;
+      FLastErrorMessage := 'connection closed by server';
+    end
+    else
+      SetSocketError('receive failed or timed out');
+    Disconnect;
+    AData := '';
+    Exit;
+  end;
+  SetLength(AData, n);
+  Result := True;
+  {$endif}
+end;
+
+// read one CRLF terminated line from the receive buffer, without the CRLF
+function TRedisLib.ReadLine(out ALine: RawByteString): boolean;
+var
+  p, scanFrom: SizeInt;
+  chunk: RawByteString;
+begin
+  Result := False;
+  ALine := '';
+  scanFrom := 1;
+  repeat
+    p := FindCRLF(FRecvBuffer, scanFrom);
+    if p > 0 then
+    begin
+      ALine := Copy(FRecvBuffer, 1, p - 1);
+      Delete(FRecvBuffer, 1, p + 1);
+      Exit(True);
+    end;
+    // the CR may already be the last byte of the buffer, rescan from there
+    scanFrom := Length(FRecvBuffer);
+    if not SocketRecv(chunk) then
+      Exit;
+    AppendBytes(FRecvBuffer, chunk);
+  until False;
+end;
+
+function TRedisLib.ReadBytes(ACount: integer; out AData: RawByteString): boolean;
+var
+  chunk: RawByteString;
+begin
+  Result := False;
+  AData := '';
+  while Length(FRecvBuffer) < ACount do
+  begin
+    if not SocketRecv(chunk) then
+      Exit;
+    AppendBytes(FRecvBuffer, chunk);
+  end;
+  AData := Copy(FRecvBuffer, 1, ACount);
+  Delete(FRecvBuffer, 1, ACount);
+  Result := True;
+end;
+
+// read one complete RESP reply; bulk and multi bulk payloads are appended
+// to the header line separated by CRLF, e.g. "$7"#13#10"example"
+function TRedisLib.ReadReply(out AReply: RawByteString): boolean;
+var
+  item: RawByteString;
+  len, i: integer;
+begin
+  Result := ReadLine(AReply);
+  if (not Result) or (AReply = '') then
+    Exit;
+  case AReply[1] of
+    __REDIS_RESPONSE_BULK_CHAR:
+    begin
+      len := StrToIntDef(Copy(AReply, 2, Length(AReply) - 1), -1);
+      if len >= 0 then
+      begin
+        Result := ReadBytes(len + 2, item); // payload + CRLF
+        if Result then
+        begin
+          SetLength(item, len);
+          AppendBytes(AReply, #13#10);
+          AppendBytes(AReply, item);
+        end;
+      end;
+    end;
+    __REDIS_RESPONSE_MULTI_BULK_CHAR:
+    begin
+      len := StrToIntDef(Copy(AReply, 2, Length(AReply) - 1), -1);
+      for i := 1 to len do
+      begin
+        Result := ReadReply(item);
+        if not Result then
+          Exit;
+        AppendBytes(AReply, #13#10);
+        AppendBytes(AReply, item);
+      end;
+    end;
+  end;
+end;
+
+function TRedisLib.BulkPayload(const AReply: string): string;
+var
+  p: integer;
+begin
+  Result := '';
+  if (AReply = '') or (AReply[1] <> __REDIS_RESPONSE_BULK_CHAR) then
+    Exit;
+  p := Pos(#13#10, AReply);
+  if p = 0 then
+    Exit;
+  Result := Copy(AReply, p + 2, Length(AReply) - p - 1);
+end;
+
+function TRedisLib.Execute(const ARequest: RawByteString): string;
+var
+  reply: RawByteString;
+begin
+  Result := '';
+  FLastError := 0;
+  FLastErrorMessage := '';
+  FResponType := rrtError;
+  FLastMessage := '';
+  if not FisConnected then
+  begin
+    if not FisAutoConnect then
+    begin
+      FLastError := 1;
+      FLastErrorMessage := 'not connected';
+      Exit;
+    end;
+    if not Connect then
+      Exit;
+  end;
+  try
+    if not SocketSend(ARequest) then
+      Exit;
+    if not ReadReply(reply) then
+      Exit;
+    // hand the bytes over unchanged, tagged with the default code page so the
+    // caller can compare them with ordinary string literals
+    SetCodePage(reply, DefaultSystemCodePage, False);
+    FLastMessage := reply;
+    FResponType := GetResponseType(FLastMessage);
+    if FResponType = rrtError then
+      FLastErrorMessage := Copy(FLastMessage, 2, Length(FLastMessage) - 1);
+  except
+    on e: Exception do
+    begin
+      FLastError := 1;
+      FLastErrorMessage := e.Message;
+      FLastMessage := '';
+      Disconnect;
+    end;
+  end;
+  Result := FLastMessage;
+end;
+
+function TRedisLib.Ping: boolean;
+begin
+  Result := SendString('PING') = '+PONG';
 end;
 
 procedure TRedisLib.FlushAll;
@@ -357,6 +770,8 @@ end;
 function TRedisLib.Info: string;
 begin
   Result := SendString('INFO');
+  if FResponType = rrtBulk then
+    Result := BulkPayload(Result);
 end;
 
 procedure TRedisLib.Synch;
@@ -366,75 +781,40 @@ end;
 
 function TRedisLib.SendString(Strings: string): string;
 var
-  s: string;
+  request: RawByteString;
 begin
-  FLastError := 0;
-  FLastErrorMessage := '';
-  FResponType := rrtError;
-  FLastMessage := '';
-  if not FisConnected then
+  request := '';
+  AppendBytes(request, Strings);
+  AppendBytes(request, #13#10);
+  Result := Execute(request);
+end;
+
+function TRedisLib.SendCommand(const Args: array of string): string;
+var
+  i: integer;
+  request: RawByteString;
+begin
+  Result := '';
+  if Length(Args) = 0 then
+    Exit;
+  request := '';
+  AppendBytes(request, __REDIS_RESPONSE_MULTI_BULK_CHAR + IntToStr(Length(Args)) + #13#10);
+  for i := 0 to High(Args) do
   begin
-    if not FisAutoConnect then
-      Exit;
-    if not Connect then
-      Exit;
+    // Length() is in bytes, the argument is copied as is whatever its code page
+    AppendBytes(request, __REDIS_RESPONSE_BULK_CHAR + IntToStr(Length(Args[i])) + #13#10);
+    AppendBytes(request, Args[i]);
+    AppendBytes(request, #13#10);
   end;
-  try
-
-    {$ifdef synapse}
-    sock.SendString(Strings + #13#10);
-    FLastError := sock.LastError;
-    if FLastError <> 0 then
-      Exit;
-    FLastMessage := trim(sock.RecvPacket(FTimeOut));
-    FLastError := sock.LastError;
-    {$endif}
-
-    {$ifdef fpcsocket}
-    Reset(SocketIn);
-    ReWrite(SocketOut);
-    WriteLn(SocketOut, Strings);
-    Flush(SocketOut);
-    ReadLn(SocketIn, FLastMessage);
-    if copy(FLastMessage, 1, 1)[1] = '$' then
-    begin
-      s := Copy(FLastMessage, 2, 5);
-      if StrToInt(s) <> -1 then
-      begin
-        ReadLn(SocketIn, s);
-        FLastMessage := FLastMessage + #13#10 + s;
-      end;
-    end;
-    FLastError := 0;
-    {$endif}
-
-    if FLastError = 0 then
-    begin
-      FResponType := GetResponseType(FLastMessage);
-    end else
-    begin
-      FLastErrorMessage := FLastMessage;
-      FLastMessage := '';
-    end;
-  except
-    on e: Exception do
-    begin
-      FLastErrorMessage := e.Message;
-    end;
-  end;
-  Result := FLastMessage;
+  Result := Execute(request);
 end;
 
 function TRedisLib.Auth(PasswordKey: string): boolean;
 begin
-  Result := False;
   if PasswordKey <> '' then
     FPassword := PasswordKey;
-
-  if SendString('AUTH ' + FPassword) = '+OK' then
-    Result := True;
+  Result := SendCommand(['AUTH', FPassword]) = '+OK';
 end;
 
 
 end.
-
