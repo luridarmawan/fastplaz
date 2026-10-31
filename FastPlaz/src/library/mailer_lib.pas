@@ -16,6 +16,13 @@ uses
 const
   _MAIL_NOSUPPORT = 'Mailer-Support not exist.';
 
+// Format an address as "Name" <email>, or just email when Name is empty.
+// CR/LF are stripped so a value cannot inject extra mail headers.
+function FormatMailAddress(const Email: string; const Name: string = ''): string;
+// Replace CR/LF in a header value (Subject, Sender, ...) with a space so a
+// value cannot inject extra mail headers.
+function SanitizeMailHeader(const S: string): string;
+
 type
 
   { TMailer }
@@ -60,6 +67,9 @@ type
     property TLS: boolean read getTLS write setTLS;
     property ErrorMessage: string read FErrorMessage;
     property Logs: string read FLogs;
+    property Recipients: TStringList read FTo;
+    property CcList: TStringList read FCc;
+    property BccList: TStringList read FBcc;
     procedure AddTo(Email: string; Name: string = '');
     procedure AddCc(Email: string; Name: string = '');
     procedure AddBcc(Email: string; Name: string = '');
@@ -73,30 +83,41 @@ implementation
 
 uses common, config_lib;
 
+function SanitizeMailHeader(const S: string): string;
+begin
+  Result := StringReplace(S, #13#10, ' ', [rfReplaceAll]);
+  Result := StringReplace(Result, #13, ' ', [rfReplaceAll]);
+  Result := StringReplace(Result, #10, ' ', [rfReplaceAll]);
+end;
+
+function FormatMailAddress(const Email: string; const Name: string): string;
+var
+  cleanName: string;
+begin
+  Result := Trim(SanitizeMailHeader(Email));
+  cleanName := Trim(SanitizeMailHeader(Name));
+  if cleanName = '' then
+    Exit;
+  cleanName := StringReplace(cleanName, '\', '\\', [rfReplaceAll]);
+  cleanName := StringReplace(cleanName, '"', '\"', [rfReplaceAll]);
+  Result := '"' + cleanName + '" <' + Result + '>';
+end;
+
 { TMailer }
 
 procedure TMailer.AddTo(Email: string; Name: string);
 begin
-  if Name = '' then
-    FTo.Add(Email)
-  else
-    FTo.Add(Name + '<' + Email + '>');
+  FTo.Add(FormatMailAddress(Email, Name));
 end;
 
 procedure TMailer.AddCc(Email: string; Name: string);
 begin
-  if Name = '' then
-    FCc.Add(Email)
-  else
-    FCc.Add(Name + '<' + Email + '>');
+  FCc.Add(FormatMailAddress(Email, Name));
 end;
 
 procedure TMailer.AddBcc(Email: string; Name: string);
 begin
-  if Name = '' then
-    FBcc.Add(Email)
-  else
-    FBcc.Add(Name + '<' + Email + '>');
+  FBcc.Add(FormatMailAddress(Email, Name));
 end;
 
 procedure TMailer.Clear;
@@ -104,12 +125,10 @@ begin
   FTo.Clear;
   FBcc.Clear;
   FCc.Clear;
-  FLogs := _MAIL_NOSUPPORT;
+  FErrorMessage := '';
+  FLogs := '';
   Subject := '';
   Message.Clear;
-  {$IFDEF XMAILER}
-  FLogs := '';
-  {$ENDIF}
 end;
 
 procedure TMailer.Prepare;
@@ -124,11 +143,12 @@ var
 {$ENDIF XMAILER}
 begin
   Result := False;
+  FErrorMessage := '';
 
   {$IFDEF XMAILER}
+  Mail := TSendMail.Create;
   try
     try
-      Mail := TSendMail.Create;
       Mail.OnProgress := @xmailer_OnProgress;
       Mail.Smtp.Host := FMailServer;
       Mail.Smtp.Port := FPort;
@@ -137,9 +157,11 @@ begin
       Mail.Smtp.SSL := FSSL;
       Mail.Smtp.TLS := FTLS;
 
-      Mail.Sender := Sender;
+      Mail.Sender := Trim(SanitizeMailHeader(Sender));
       Mail.Receivers.Text := FTo.Text;
-      Mail.Subject := Subject;
+      Mail.CC.Text := FCc.Text;
+      Mail.BCC.Text := FBcc.Text;
+      Mail.Subject := Trim(SanitizeMailHeader(Subject));
       Mail.Message.Text := Message.Text;
       if FEmailFormat = 'html' then
         Mail.ContentType := ctTextHTML
@@ -152,12 +174,15 @@ begin
       on e: Exception do
       begin
         FErrorMessage := e.Message;
-        FLogs := e.Message + #13;
+        FLogs := FLogs + e.Message + #13;
       end;
     end;
   finally
     Mail.Free;
   end;
+  {$ELSE}
+  FErrorMessage := _MAIL_NOSUPPORT;
+  FLogs := FLogs + _MAIL_NOSUPPORT + #13;
   {$ENDIF XMAILER}
 
 end;
@@ -244,11 +269,12 @@ begin
   FTo := TStringList.Create;
   FCc := TStringList.Create;
   FBcc := TStringList.Create;
-  message := TStringList.Create;
+  Message := TStringList.Create;
   FSSL := False;
   FTLS := False;
   FEmailFormat := 'html';
   FLogs := '';
+  FErrorMessage := '';
 
   // read from config.json
   MailServer := Config[UTF8Decode(format(_MAIL_MAILSERVER, [Setting]))];
@@ -262,11 +288,11 @@ end;
 
 destructor TMailer.Destroy;
 begin
-  inherited Destroy;
-  FreeAndNil(message);
+  FreeAndNil(Message);
   FreeAndNil(FTo);
   FreeAndNil(FCc);
   FreeAndNil(FBcc);
+  inherited Destroy;
 end;
 
 end.
