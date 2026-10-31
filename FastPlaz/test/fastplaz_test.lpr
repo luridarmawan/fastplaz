@@ -3,7 +3,8 @@ program fastplaz_test;
 {$mode objfpc}{$H+}
 
 uses
-  Classes, consoletestrunner, test_datetime_lib, test_redis_lib;
+  Classes, consoletestrunner, test_datetime_lib, test_redis_lib,
+  test_json_lib, test_config_lib, test_common;
 
 type
 

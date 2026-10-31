@@ -15,7 +15,7 @@ Each test project is a standalone console program, so it can be run without inst
 | Project | Location | What is tested |
 | --- | --- | --- |
 | `regex_tester_test` | `tools/src/test` | `regex_tester_lib` – logic behind the *Regex Tester* tool and the `REGEX_*` constants |
-| `fastplaz_test` | `FastPlaz/test` | `datetime_lib` – `DateTimeHuman()`, `DateTimeHumanAt()` and the date string parser `TryParseHumanDate()`<br>`redis_lib` – `TRedisLib`: configuration, RESP replies, SET/GET, timeout and reconnect (see [Redis tests](#redis-tests)) |
+| `fastplaz_test` | `FastPlaz/test` | `datetime_lib` – `DateTimeHuman()`, `DateTimeHumanAt()` and the date string parser `TryParseHumanDate()`<br>`redis_lib` – `TRedisLib`: configuration, RESP replies, SET/GET, timeout and reconnect (see [Redis tests](#redis-tests))<br>`json_lib` – `TJSONUtil`: loading, path access, typed values, arrays and items<br>`config_lib` – `TMyConfig`: `ValidateFile()`, `Value[]`, `GetObject()` and `SetDataValue()`<br>`common` – base64, `HTMLDecode()`, `StripHTML()`, `RandomString()`, `isIPAddress()` and string helpers |
 
 ### Prerequisites
 
@@ -185,7 +185,7 @@ Setiap project test adalah program console mandiri, sehingga bisa dijalankan tan
 | Project | Lokasi | Yang diuji |
 | --- | --- | --- |
 | `regex_tester_test` | `tools/src/test` | `regex_tester_lib` – logika di balik tool *Regex Tester* dan konstanta `REGEX_*` |
-| `fastplaz_test` | `FastPlaz/test` | `datetime_lib` – `DateTimeHuman()`, `DateTimeHumanAt()` dan parser string tanggal `TryParseHumanDate()`<br>`redis_lib` – `TRedisLib`: konfigurasi, balasan RESP, SET/GET, timeout dan reconnect (lihat [Test Redis](#test-redis)) |
+| `fastplaz_test` | `FastPlaz/test` | `datetime_lib` – `DateTimeHuman()`, `DateTimeHumanAt()` dan parser string tanggal `TryParseHumanDate()`<br>`redis_lib` – `TRedisLib`: konfigurasi, balasan RESP, SET/GET, timeout dan reconnect (lihat [Test Redis](#test-redis))<br>`json_lib` – `TJSONUtil`: load, akses path, nilai bertipe, array dan item<br>`config_lib` – `TMyConfig`: `ValidateFile()`, `Value[]`, `GetObject()` dan `SetDataValue()`<br>`common` – base64, `HTMLDecode()`, `StripHTML()`, `RandomString()`, `isIPAddress()` dan helper string |
 
 ### Prasyarat
 
