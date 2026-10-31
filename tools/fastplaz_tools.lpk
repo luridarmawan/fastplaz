@@ -9,7 +9,7 @@
       <Version Value="11"/>
       <PathDelim Value="\"/>
       <SearchPaths>
-        <OtherUnitFiles Value="src;..\FastPlaz\src\library"/>
+        <OtherUnitFiles Value="src;..\FastPlaz\src\library;..\FastPlaz\src\integration"/>
         <UnitOutputDirectory Value="lib\tools\$(TargetCPU)-$(TargetOS)"/>
       </SearchPaths>
       <Linking>
@@ -28,7 +28,7 @@
 for more information visit https://www.fastplaz.com
 "/>
     <Version Major="1" Release="1" Build="145"/>
-    <Files Count="49">
+    <Files Count="50">
       <Item1>
         <Filename Value="..\FastPlaz\src\library\thread_custom.pas"/>
         <UnitName Value="thread_custom"/>
@@ -226,6 +226,10 @@ for more information visit https://www.fastplaz.com
         <Filename Value="src\regex_tester_lib.pas"/>
         <UnitName Value="regex_tester_lib"/>
       </Item49>
+      <Item50>
+        <Filename Value="..\FastPlaz\src\integration\openai_integration.pas"/>
+        <UnitName Value="openai_integration"/>
+      </Item50>
     </Files>
     <CompatibilityMode Value="True"/>
     <i18n>
@@ -233,34 +237,31 @@ for more information visit https://www.fastplaz.com
       <OutDir Value="src\i18n"/>
       <EnableI18NForLFM Value="True"/>
     </i18n>
-    <RequiredPkgs Count="9">
+    <RequiredPkgs Count="8">
       <Item1>
-        <PackageName Value="fastplaz_integration"/>
+        <PackageName Value="jcfidelazarus"/>
       </Item1>
       <Item2>
-        <PackageName Value="jcfidelazarus"/>
+        <PackageName Value="jcfbase"/>
       </Item2>
       <Item3>
-        <PackageName Value="jcfbase"/>
+        <PackageName Value="IDEIntf"/>
       </Item3>
       <Item4>
-        <PackageName Value="IDEIntf"/>
+        <PackageName Value="LCL"/>
       </Item4>
       <Item5>
-        <PackageName Value="LCL"/>
+        <PackageName Value="FCL"/>
       </Item5>
       <Item6>
-        <PackageName Value="FCL"/>
+        <PackageName Value="CodeTools"/>
       </Item6>
       <Item7>
-        <PackageName Value="CodeTools"/>
+        <PackageName Value="SynEdit"/>
       </Item7>
       <Item8>
-        <PackageName Value="SynEdit"/>
-      </Item8>
-      <Item9>
         <PackageName Value="LazUtils"/>
-      </Item9>
+      </Item8>
     </RequiredPkgs>
     <UsageOptions>
       <UnitPath Value="$(PkgOutDir)"/>
