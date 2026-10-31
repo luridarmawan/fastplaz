@@ -15,12 +15,13 @@ Each test project is a standalone console program, so it can be run without inst
 | Project | Location | What is tested |
 | --- | --- | --- |
 | `regex_tester_test` | `tools/src/test` | `regex_tester_lib` – logic behind the *Regex Tester* tool and the `REGEX_*` constants |
-| `fastplaz_test` | `FastPlaz/test` | `datetime_lib` – `DateTimeHuman()`, `DateTimeHumanAt()` and the date string parser `TryParseHumanDate()` |
+| `fastplaz_test` | `FastPlaz/test` | `datetime_lib` – `DateTimeHuman()`, `DateTimeHumanAt()` and the date string parser `TryParseHumanDate()`<br>`redis_lib` – `TRedisLib`: configuration, RESP replies, SET/GET, timeout and reconnect (see [Redis tests](#redis-tests)) |
 
 ### Prerequisites
 
 * FPC / Free Pascal Compiler, version 3.2.2
 * Lazarus (for `lazbuild`), optional when using `instantfpc`
+* A Redis server for the `TRedisLibServerTest` suite, optional (see [Redis tests](#redis-tests))
 
 ### Quick run with instantfpc
 
@@ -55,6 +56,23 @@ Notes:
 * The compiled program is stored in the `instantfpc` cache (`instantfpc --get-cache`), not in the repository.
 * On Windows, if `instantfpc` is not in `PATH`, `run_tests.bat` uses `C:\lazarus\fpc\3.2.2\bin\x86_64-win64`.
 * `FastPlaz/test/run_tests.*` adds the unit paths of the `fastplaz_runtime` package, because `datetime_lib` depends on `language_lib` and `common`.
+
+### Redis tests
+
+`test_redis_lib` has two suites:
+
+* `TRedisLibOfflineTest` needs no server: defaults, port validation, `BulkPayload()`, master configuration, connection refused, unresolvable host.
+* `TRedisLibServerTest` talks to a real Redis server: SET/GET, special characters, code page tagged values, large values, INFO, numeric and multi bulk replies, error replies, inline commands, read timeout and reconnect, host name lookup, write to master.
+
+The server defaults to `127.0.0.1:6379`. When it is not reachable the whole `TRedisLibServerTest` suite is reported as *ignored*, not as failed, so the run still passes. Another server can be set through environment variables:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `FASTPLAZ_TEST_REDIS_HOST` | `127.0.0.1` | IP address or host name |
+| `FASTPLAZ_TEST_REDIS_PORT` | `6379` | port |
+| `FASTPLAZ_TEST_REDIS_PASSWORD` | *(empty)* | sent with `AUTH` when set |
+
+Every key written by the tests starts with `fastplaz:test:` and is deleted in `TearDown`; the database is never flushed. Run only the Redis tests with `--suite=TRedisLibServerTest`.
 
 ### Build
 
@@ -167,12 +185,13 @@ Setiap project test adalah program console mandiri, sehingga bisa dijalankan tan
 | Project | Lokasi | Yang diuji |
 | --- | --- | --- |
 | `regex_tester_test` | `tools/src/test` | `regex_tester_lib` – logika di balik tool *Regex Tester* dan konstanta `REGEX_*` |
-| `fastplaz_test` | `FastPlaz/test` | `datetime_lib` – `DateTimeHuman()`, `DateTimeHumanAt()` dan parser string tanggal `TryParseHumanDate()` |
+| `fastplaz_test` | `FastPlaz/test` | `datetime_lib` – `DateTimeHuman()`, `DateTimeHumanAt()` dan parser string tanggal `TryParseHumanDate()`<br>`redis_lib` – `TRedisLib`: konfigurasi, balasan RESP, SET/GET, timeout dan reconnect (lihat [Test Redis](#test-redis)) |
 
 ### Prasyarat
 
 * FPC / Free Pascal Compiler, versi 3.2.2
 * Lazarus (untuk `lazbuild`), opsional jika memakai `instantfpc`
+* Server Redis untuk suite `TRedisLibServerTest`, opsional (lihat [Test Redis](#test-redis))
 
 ### Jalankan cepat dengan instantfpc
 
@@ -207,6 +226,23 @@ Catatan:
 * Program hasil compile disimpan di cache `instantfpc` (`instantfpc --get-cache`), bukan di repositori.
 * Di Windows, jika `instantfpc` tidak ada di `PATH`, `run_tests.bat` memakai `C:\lazarus\fpc\3.2.2\bin\x86_64-win64`.
 * `FastPlaz/test/run_tests.*` menambahkan path unit dari package `fastplaz_runtime`, karena `datetime_lib` bergantung pada `language_lib` dan `common`.
+
+### Test Redis
+
+`test_redis_lib` berisi dua suite:
+
+* `TRedisLibOfflineTest` tidak butuh server: nilai default, validasi port, `BulkPayload()`, konfigurasi master, koneksi ditolak, host tidak dikenal.
+* `TRedisLibServerTest` memakai server Redis sungguhan: SET/GET, karakter khusus, nilai ber-codepage, nilai besar, INFO, balasan numerik dan multi bulk, balasan error, perintah inline, timeout baca dan reconnect, lookup nama host, tulis ke master.
+
+Server default `127.0.0.1:6379`. Jika tidak bisa dihubungi, seluruh suite `TRedisLibServerTest` dilaporkan sebagai *ignored*, bukan gagal, sehingga run tetap lulus. Server lain bisa diatur lewat variabel lingkungan:
+
+| Variabel | Default | Keterangan |
+| --- | --- | --- |
+| `FASTPLAZ_TEST_REDIS_HOST` | `127.0.0.1` | alamat IP atau nama host |
+| `FASTPLAZ_TEST_REDIS_PORT` | `6379` | port |
+| `FASTPLAZ_TEST_REDIS_PASSWORD` | *(kosong)* | dikirim dengan `AUTH` jika diisi |
+
+Semua key yang ditulis test diawali `fastplaz:test:` dan dihapus di `TearDown`; database tidak pernah di-flush. Untuk menjalankan test Redis saja: `--suite=TRedisLibServerTest`.
 
 ### Build
 
