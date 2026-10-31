@@ -38,6 +38,8 @@ type
     procedure TestMasterIsOptional;
     procedure TestConnectRefused;
     procedure TestConnectTimeout;
+    procedure TestIPv6LiteralForms;
+    procedure TestIPv6Unreachable;
     procedure TestSendWithoutAutoConnect;
     procedure TestUnresolvableHost;
     procedure TestSynchSendsNothing;
@@ -70,6 +72,7 @@ type
     procedure TestReadTimeoutAndReconnect;
     procedure TestDisconnect;
     procedure TestConnectByHostName;
+    procedure TestConnectIPv6Loopback;
     procedure TestWriteToMaster;
   end;
 
@@ -147,6 +150,7 @@ begin
     AssertTrue('auto connect is on by default', R.isAutoConnect);
     AssertFalse('not connected after Create', R.isConnected);
     AssertFalse('WriteToMaster is off by default', R.WriteToMaster);
+    AssertEquals('no resolved address before Connect', '', R.ResolvedAddress);
   finally
     R.Free;
   end;
@@ -276,6 +280,61 @@ begin
   end;
 end;
 
+procedure TRedisLibOfflineTest.TestIPv6LiteralForms;
+var
+  R: TRedisLib;
+begin
+  // nothing listens on port 1; the point is that every form is parsed as the
+  // IPv6 loopback address and reported as "[::1]:1"
+  R := TRedisLib.Create;
+  try
+    R.Port := '1';
+    // Windows reports a refused loopback connect only after its SYN retries,
+    // so each attempt runs into this timeout; keep it short
+    R.TimeOut := 500;
+    R.ServerAddress := '::1';
+    AssertFalse('::1 must not connect on port 1', R.Connect);
+    AssertTrue('::1 -> ' + R.LastErrorMessage, Pos('[::1]:1', R.LastErrorMessage) > 0);
+
+    R.ServerAddress := '[::1]';
+    AssertEquals('bracket form is kept as given', '[::1]', R.ServerAddress);
+    AssertFalse(R.Connect);
+    AssertTrue('[::1] -> ' + R.LastErrorMessage, Pos('[::1]:1', R.LastErrorMessage) > 0);
+
+    R.ServerAddress := '0:0:0:0:0:0:0:1';
+    AssertFalse(R.Connect);
+    AssertTrue('long form -> ' + R.LastErrorMessage, Pos('[::1]:1', R.LastErrorMessage) > 0);
+
+    R.ServerAddress := '2001:DB8:0:0:0:0:2:1';
+    AssertFalse(R.Connect);
+    AssertTrue('RFC 5952 text -> ' + R.LastErrorMessage, Pos('[2001:db8::2:1]:1', R.LastErrorMessage) > 0);
+  finally
+    R.Free;
+  end;
+end;
+
+procedure TRedisLibOfflineTest.TestIPv6Unreachable;
+var
+  R: TRedisLib;
+  t0: TDateTime;
+  elapsed: int64;
+begin
+  R := TRedisLib.Create;
+  try
+    // 2001:db8::/32 is the documentation prefix (RFC 3849), never routed
+    R.ServerAddress := '2001:db8::1';
+    R.TimeOut := 1000;
+    t0 := Now;
+    AssertFalse('connect must fail', R.Connect);
+    elapsed := MilliSecondsBetween(Now, t0);
+    AssertTrue('LastError is set', R.LastError <> 0);
+    AssertTrue('message: ' + R.LastErrorMessage, Pos('[2001:db8::1]', R.LastErrorMessage) > 0);
+    AssertTrue(Format('gave up within 4 s, took %d ms', [elapsed]), elapsed < 4000);
+  finally
+    R.Free;
+  end;
+end;
+
 procedure TRedisLibOfflineTest.TestSendWithoutAutoConnect;
 var
   R: TRedisLib;
@@ -382,6 +441,7 @@ end;
 procedure TRedisLibServerTest.TestPing;
 begin
   AssertTrue(FRedis.isConnected);
+  AssertTrue('ResolvedAddress is set after Connect', FRedis.ResolvedAddress <> '');
   AssertTrue(FRedis.Ping);
   AssertEquals('+PONG', FRedis.LastMessage);
   AssertTrue(FRedis.ResponType = rrtStatus);
@@ -594,6 +654,31 @@ begin
     if RedisTestPassword <> '' then
       AssertTrue(R.Auth(RedisTestPassword));
     AssertTrue(R.Ping);
+  finally
+    R.Free;
+  end;
+end;
+
+procedure TRedisLibServerTest.TestConnectIPv6Loopback;
+var
+  R: TRedisLib;
+begin
+  if RedisTestHost <> '127.0.0.1' then
+    Ignore('only run against the default local server');
+  R := TRedisLib.Create;
+  try
+    R.ServerAddress := '::1';
+    R.Port := RedisTestPort;
+    if not R.Connect then
+      // default redis.conf binds "127.0.0.1 -::1", but a server may be IPv4 only
+      Ignore('redis does not listen on [::1]:' + RedisTestPort + ' (' + R.LastErrorMessage + ')');
+    AssertEquals('::1', R.ResolvedAddress);
+    if RedisTestPassword <> '' then
+      AssertTrue(R.Auth(RedisTestPassword));
+    AssertTrue(R.Ping);
+    R[Key('ipv6')] := 'over ipv6';
+    AssertEquals('over ipv6', R[Key('ipv6')]);
+    R.SendCommand(['DEL', Key('ipv6')]);
   finally
     R.Free;
   end;
