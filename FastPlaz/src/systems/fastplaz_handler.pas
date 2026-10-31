@@ -125,7 +125,7 @@ type
 
     procedure LanguageInit;
     procedure CloseConnection( const AResponseContent: string = ''; ACode: Integer = 200);
-    procedure EnableCors;
+    procedure EnableCors(const AAllowedOrigin: string = '*');
 
     property URI: string read GetURI;
     property Environment[const KeyName: string]: string read GetEnvironment;
@@ -324,6 +324,11 @@ implementation
 
 uses common, language_lib, database_lib, logutil_lib, theme_controller, html_lib;
 
+type
+  // TCustomWebApplication.WebHandler is protected; a descendant declared in
+  // this unit is the standard way to reach it
+  TWebApplicationAccess = class(TCustomWebApplication);
+
 var
   MethodMap: TStringList;
   RouteRegexMap: TStringList;
@@ -359,7 +364,11 @@ begin
   end;
 
   if Config.Status = 2 then
+  begin
+    // Die only sends the response and flags termination, it does not halt
     die(Config.Message);
+    Exit;
+  end;
   AppData.sitename := string(Config.GetValue(_SYSTEM_SITENAME, _APP));
   AppData.slogan := string(Config.GetValue(_SYSTEM_SLOGAN, _APP));
   AppData.baseUrl := string(Config.GetValue(_SYSTEM_BASEURL, ''));
@@ -489,7 +498,9 @@ begin
   FastPlasAppandler.isDisplayError := True;
   if not AppData.themeEnable then
   begin
+    // ThemeUtil does not exist without a theme; Die does not halt, so stop here
     die(Message);
+    Exit;
   end;
 
   if (not AppData.useDatabase) or (AppData.useDatabase and AppData.databaseActive) then
@@ -1031,10 +1042,18 @@ begin
   Response.SendContent;
 end;
 
-procedure TMyCustomWebModule.EnableCors;
+procedure TMyCustomWebModule.EnableCors(const AAllowedOrigin: string);
 begin
-  CustomHeader['Access-Control-Allow-Origin'] := '*';
-  CustomHeader['Access-Control-Allow-Credentials'] := 'true';
+  // browsers reject "Allow-Credentials: true" together with a "*" origin,
+  // so credentials are only announced for an explicit origin
+  if (AAllowedOrigin = '') or (AAllowedOrigin = '*') then
+    CustomHeader['Access-Control-Allow-Origin'] := '*'
+  else
+  begin
+    CustomHeader['Access-Control-Allow-Origin'] := AAllowedOrigin;
+    CustomHeader['Access-Control-Allow-Credentials'] := 'true';
+    CustomHeader['Vary'] := 'Origin';
+  end;
   CustomHeader['Access-Control-Allow-Methods'] := 'OPTIONS, GET, POST';
   CustomHeader['Access-Control-Allow-Headers'] := 'Content-Type, Depth, User-Agent, X-File-Size, X-Requested-With, If-Modified-Since, X-File-Name, Cache-Control';
 end;
@@ -1484,17 +1503,31 @@ end;
 
 function TFastPlasAppandler.FindModule(ModuleClass: TCustomHTTPModuleClass):
 TCustomHTTPModule;
-var
-  i: integer;
-begin
-  i := Application.ComponentCount - 1;
-  while (i >= 0) and (not ((Application.Components[i] is ModuleClass) and
-      (TCustomHTTPModule(Application.Components[i]).Kind <> wkOneShot))) do
-    Dec(i);
-  if (i >= 0) then
-    Result := Application.Components[i] as TCustomHTTPModule
-  else
+
+  function FindIn(AOwner: TComponent): TCustomHTTPModule;
+  var
+    i: integer;
+  begin
     Result := nil;
+    if AOwner = nil then
+      Exit;
+    i := AOwner.ComponentCount - 1;
+    while (i >= 0) and (not ((AOwner.Components[i] is ModuleClass) and
+        (TCustomHTTPModule(AOwner.Components[i]).Kind <> wkOneShot))) do
+      Dec(i);
+    if (i >= 0) then
+      Result := AOwner.Components[i] as TCustomHTTPModule;
+  end;
+
+begin
+  // modules created by LoadModule are owned by this handler, the ones created
+  // by fpWeb for the current request are owned by Application.WebHandler;
+  // Application itself never owns a module, so it is only kept as a fallback
+  Result := FindIn(Self);
+  if Result = nil then
+    Result := FindIn(TWebApplicationAccess(TCustomWebApplication(Application)).WebHandler);
+  if Result = nil then
+    Result := FindIn(Application);
 end;
 
 procedure TFastPlasAppandler.AddLog(Message: string);

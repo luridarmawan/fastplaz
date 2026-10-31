@@ -19,7 +19,7 @@ uses
   fpcgi, fpTemplate, fphttp, fpjson, HTTPDefs, dateutils,
   regexpr_lib, db, sqldb,
   common, fastplaz_handler, database_lib, datetime_lib, modvar_util, json_lib,
-  Classes, SysUtils;
+  Classes, SysUtils, Variants;
 
 const
   // if use { ... }
@@ -115,6 +115,7 @@ type
     procedure SetThemeName(AValue: string);
     procedure SetTrimForce(AValue: boolean);
     procedure SetTrimWhiteSpace(AValue: boolean);
+    function HitKey( const URL:string): string;
     procedure AddHit( const URL:string);
 
     function wpautop( Content:string; BR:boolean = true):string;
@@ -387,67 +388,91 @@ var
   fieldname,
   tmpvalue,
   varname : string;
-  vartmp : TStrings;
+  vartmp, assignTmp : TStrings;
   f : double;
+  idx : integer;
 begin
+  Result := '';
   vartmp := Explode( VariableName, '.');
-  varname := trim(vartmp[0]);
-  tmpvalue := '';
-  if varname = '' then
-  begin
-    Result := 'variable '+varname+' not found.';
-    exit;
-  end;
-
-  // is var1 numeric ?
   try
-    f := StrToFloat( varname);
-    Result := f;
-    Exit;
-  except
-  end;
-
-  // get direct string value
-  if preg_match('(["''])(.*?)(["''])', varname) then
-  begin
-    tmpvalue := varname.Replace('"','').Replace('''','');
-    Result := tmpvalue;
-    Exit;
-  end;
-
-  // check from varstring first
-  if FAssignVarStringMap.IndexOfName( varname) <> -1 then
-  begin
-    Result := FAssignVarStringMap.Values[ varname];
-    Exit;
-  end;
-
-  // check from 'assignto' tag :
-  // ex: [aItem.level assignto="level"]
-  if FTagAssign_Variable.IndexOfName( varname) <> -1 then
-  begin
-    Result := FTagAssign_Variable.Values[ varname];
-    vartmp := Explode( Result, '|');
-    Result := vartmp[1];
-    Exit;
-  end;
-
-  // check from foreach-storage
-  try
-    if assignVarMap[ ForeachTable_Keyname] <> nil then
+    varname := trim(vartmp[0]);
+    tmpvalue := '';
+    if varname = '' then
     begin
-      fieldname:= vartmp[1];
-      tmpvalue := TSQLQuery( assignVarMap[ForeachTable_Keyname]^).FieldByName(fieldname).AsString;
+      Result := 'variable '+varname+' not found.';
+      Exit;
+    end;
+
+    // is var1 numeric ?
+    if TryStrToFloat( varname, f) then
+    begin
+      Result := f;
+      Exit;
+    end;
+
+    // get direct string value
+    if preg_match('(["''])(.*?)(["''])', varname) then
+    begin
+      tmpvalue := varname.Replace('"','').Replace('''','');
       Result := tmpvalue;
+      Exit;
     end;
-  except
-    on e: Exception do
-    begin
-      die( 'ThemeUtil.VarValue['+VariableName+']: ' + e.Message);
-    end;
-  end;
 
-  FreeAndNil( vartmp);
+    // check from varstring first
+    if FAssignVarStringMap.IndexOfName( varname) <> -1 then
+    begin
+      Result := FAssignVarStringMap.Values[ varname];
+      Exit;
+    end;
+
+    // check from 'assignto' tag :
+    // ex: [aItem.level assignto="level"]
+    if FTagAssign_Variable.IndexOfName( varname) <> -1 then
+    begin
+      // stored as "<type>|<value>", ex: "s|myvalue"
+      assignTmp := Explode( FTagAssign_Variable.Values[ varname], '|');
+      try
+        if assignTmp.Count > 1 then
+          Result := assignTmp[1]
+        else
+          Result := FTagAssign_Variable.Values[ varname];
+      finally
+        FreeAndNil( assignTmp);
+      end;
+      Exit;
+    end;
+
+    // check from foreach-storage
+    if (ForeachTable_Keyname = '') or (vartmp.Count < 2) then
+      Exit;
+    idx := assignVarMap.IndexOf( ForeachTable_Keyname);
+    if idx = -1 then
+      Exit;
+    if assignVarMap.Data[idx] = nil then
+      Exit;
+    try
+      fieldname:= vartmp[1];
+      tmpvalue := TSQLQuery( assignVarMap.Data[idx]^).FieldByName(fieldname).AsString;
+      Result := tmpvalue;
+    except
+      on e: Exception do
+      begin
+        if AppData.debug then
+          LogUtil.add( 'ThemeUtil.VarValue['+VariableName+']: ' + e.Message);
+        Result := '';
+      end;
+    end;
+  finally
+    FreeAndNil( vartmp);
+  end;
+end;
+
+// normalize URL into a key for hits.log; must be used by both AddHit and GetHitCount
+function TThemeUtil.HitKey(const URL: string): string;
+begin
+  Result := ReplaceAll( URL, [ 'http://', 'https://'], '');
+  Result := ReplaceAll( Result, ['?', '&', '=', '/', '\', '.'], '-');
+  Result := UrlEncode( Result);
 end;
 
 procedure TThemeUtil.AddHit(const URL: string);
@@ -456,9 +481,7 @@ var
   i : integer;
 begin
   if FHitType = htNone then Exit;
-  s := ReplaceAll( URL, [ 'http://', 'https://'], '');
-  s := ReplaceAll( s, ['?', '&', '=', '/', '\', '.'], '-');
-  s := UrlEncode( s);
+  s := HitKey( URL);
   i := 1;
   case FHitType of
     htFile : begin
@@ -533,6 +556,7 @@ begin
 
     // check : br before p|li|div|dl|dd|dt|th|pre|td|ul|ol
 
+    Result := html;
   end else
   begin
     Result := Content;
@@ -540,7 +564,6 @@ begin
   end;
 
   FreeAndNil( tmp);
-  Result := html;
 end;
 
 function TThemeUtil.MultiFilter(AContent: string): string;
@@ -554,15 +577,15 @@ var
   s : string;
 begin
   Result:=0;
-  s := '';
   if FHitType = htNone then Exit;
+  s := URL;
+  if s = '' then s := Application.Request.URL;
+  s := HitKey( s);
 
   case FHitType of
     htFile : begin
       if FileExists( IncludeTrailingPathDelimiter(AppData.tempDir)+__HITS_FILENAME) then
       begin
-        if s = '' then s := Application.Request.URL;
-        s := ReplaceAll( s, ['?', '&', '=', '/'], ['-', '-', '-', '-']);
         FHits.LoadFromFile(IncludeTrailingPathDelimiter(AppData.tempDir)+__HITS_FILENAME);
         Result := s2i( FHits.Values[s]);
       end;
@@ -641,7 +664,7 @@ begin
         fs.DecimalSeparator := ',';
         fs.ThousandSeparator := '.';
         s := '#,###.##';
-        if ATagString.Values['format'] <> '' then
+        if (ATagString <> nil) and (ATagString.Values['format'] <> '') then
           s := ATagString.Values['format'];
         Result := FormatFloat(s, s2f(Content), fs);
       end;
@@ -690,50 +713,75 @@ var
   StringResult : string;
   str : TStringList;
   i : integer;
+  useCache, ownModule : boolean;
 begin
+  Result := '';
+  StringResult := '';
   mi := ModuleFactory.FindModule( ModuleName);
   if mi = nil then begin
     Result := EchoError( __Err_Theme_Modul_NotFond, [ModuleName]);
     Exit;
   end;
-  //i := ModuleFactory.IndexOfModule( ModuleName);
-  mc := mi.ModuleClass;
-  m:=FastPlasAppandler.FindModule(mc);
-  if m = nil then begin
-    m:=mc.CreateNew(nil);
-  end else begin
-  end;
+
+  useCache := (Parameter.Values['cache']='1') or (Parameter.Values['cache']='true');
+  f := '';
 
   // if cache, load from cache
-  if (Parameter.Values['cache']='1') or (Parameter.Values['cache']='true') then begin
+  if useCache then begin
     f := ExtractFileDir( Application.ExeName) + DirectorySeparator + AppData.tempDir + DirectorySeparator + 'cache'+DirectorySeparator + ModuleName + '-' + FunctionName + '.html';
     if FileExists( f) then begin
 
       i := HoursBetween( FileDateToDateTime( FileAge( f)), now);
       if i = 0 then begin  // cache : 1 hour
         str := TStringList.Create;
-        str.LoadFromFile( f);
-        Result := str.Text;
-        FreeAndNil( str);
+        try
+          str.LoadFromFile( f);
+          Result := str.Text;
+        finally
+          FreeAndNil( str);
+        end;
         Exit;
       end;
     end;
   end;
 
-  // OnBlockController
-  if TMyCustomWebModule(m).OnBlockController <> nil then begin
-    TMyCustomWebModule(m).OnBlockController( Self, FunctionName, Parameter, StringResult);
-    Result := StringResult;
+  //i := ModuleFactory.IndexOfModule( ModuleName);
+  mc := mi.ModuleClass;
+  m:=FastPlasAppandler.FindModule(mc);
+  ownModule := (m = nil);
+  if ownModule then begin
+    m:=mc.CreateNew(nil);
+  end;
+
+  try
+    // OnBlockController
+    if (m is TMyCustomWebModule) and (TMyCustomWebModule(m).OnBlockController <> nil) then begin
+      TMyCustomWebModule(m).OnBlockController( Self, FunctionName, Parameter, StringResult);
+      Result := StringResult;
+    end;
+  finally
+    if ownModule then
+      FreeAndNil( m);
   end;
 
   //-- if cache, save to cache
-  if (Parameter.Values['cache']='1') or (Parameter.Values['cache']='true') then begin
-    if not DirectoryExists( ExtractFileDir( f)) then
-      MkDir( ExtractFileDir( f));
-    str := TStringList.Create;
-    str.Text:= StringResult;
-    str.SaveToFile( f);
-    FreeAndNil( str);
+  if useCache then begin
+    try
+      ForceDirectories( ExtractFileDir( f));
+      str := TStringList.Create;
+      try
+        str.Text:= StringResult;
+        str.SaveToFile( f);
+      finally
+        FreeAndNil( str);
+      end;
+    except
+      on E: Exception do
+      begin
+        if AppData.debug then
+          LogUtil.add( 'BlockController cache: ' + E.Message);
+      end;
+    end;
   end;
 end;
 
@@ -933,35 +981,38 @@ begin
 end;
 
 function TThemeUtil.GetVersionInfo(): boolean;
+var
+  vi : TVersionInfo;
 begin
-  if VersionInfo.FullVersion = '' then
-  begin
+  Result := True;
+  if VersionInfo.FullVersion <> '' then
+    Exit;
+
+  try
+    vi := TVersionInfo.Create;
     try
-      with TVersionInfo.Create do
-      begin
-        Load( HINSTANCE);
-        VersionInfo.Major        := FixedInfo.FileVersion[0];
-        VersionInfo.Minor        := FixedInfo.FileVersion[1];
-        VersionInfo.Revision     := FixedInfo.FileVersion[2];
-        VersionInfo.BuldNumber   := FixedInfo.FileVersion[3];
+      vi.Load( HINSTANCE);
+      VersionInfo.Major        := vi.FixedInfo.FileVersion[0];
+      VersionInfo.Minor        := vi.FixedInfo.FileVersion[1];
+      VersionInfo.Revision     := vi.FixedInfo.FileVersion[2];
+      VersionInfo.BuldNumber   := vi.FixedInfo.FileVersion[3];
 
-        VersionInfo.Version  :=
-          i2s( VersionInfo.Major) + '.' +
-          i2s( VersionInfo.Minor) + '.' +
-          i2s( VersionInfo.Revision);
+      VersionInfo.Version  :=
+        i2s( VersionInfo.Major) + '.' +
+        i2s( VersionInfo.Minor) + '.' +
+        i2s( VersionInfo.Revision);
 
-        VersionInfo.FullVersion  :=
-          i2s( VersionInfo.Major) + '.' +
-          i2s( VersionInfo.Minor) + '.' +
-          i2s( VersionInfo.Revision) + ' (build ' +
-          i2s( VersionInfo.BuldNumber) + ')';
-        Free;
-      end;
-      Result:=True;
-    except
-      VersionInfo.FullVersion := '-';
-      Result:= False;
+      VersionInfo.FullVersion  :=
+        i2s( VersionInfo.Major) + '.' +
+        i2s( VersionInfo.Minor) + '.' +
+        i2s( VersionInfo.Revision) + ' (build ' +
+        i2s( VersionInfo.BuldNumber) + ')';
+    finally
+      vi.Free;
     end;
+  except
+    VersionInfo.FullVersion := '-';
+    Result:= False;
   end;
 end;
 
@@ -969,14 +1020,19 @@ function TThemeUtil.getCacheFileName: string;
 var
   pathinfo: string;
 begin
-  pathinfo := copy(Application.Request.PathInfo, 1,
-    length(Application.Request.PathInfo) - 1);
-  if pathinfo = '' then
-    pathinfo := Application.Request.QueryString;
+  pathinfo := Application.Request.PathInfo;
+  // strip trailing slash only when present; blindly dropping the last char
+  // made "/page/1" and "/page/2" share one cache file
+  if (pathinfo <> '') and (pathinfo[length(pathinfo)] = '/') then
+    pathinfo := copy(pathinfo, 1, length(pathinfo) - 1);
+  if Application.Request.QueryString <> '' then
+    pathinfo := pathinfo + '-' + Application.Request.QueryString;
   if pathinfo = '' then
     pathinfo := 'home';
-  if pathinfo[1] = DirectorySeparator then
+  if (pathinfo[1] = '/') or (pathinfo[1] = DirectorySeparator) then
     pathinfo := copy(pathinfo, 2, length(pathinfo) - 1);
+  if pathinfo = '' then
+    pathinfo := 'home';
   Result := ExtractFileDir(Application.ExeName) + DirectorySeparator + AppData.tempDir +
     DirectorySeparator + 'cache' + DirectorySeparator + GetActiveModuleName(Application.Request) +
     DirectorySeparator + SafeText( pathinfo) + '-' + LANG + '.html';
@@ -1052,81 +1108,80 @@ function TThemeUtil.ConditionalIfProcessor(TagProcessor: TReplaceTagEvent; Conte
   begin
     Result := False;
     parameter := Explode(string(ARegex.Match[1]), ' ');
-    if (parameter.Count < 4) then
-    begin
-      Exit;
-    end;
+    try
+      if (parameter.Count < 4) then
+      begin
+        Exit;
+      end;
 
-    if FAssignVarStringMap.IndexOfName( parameter[1]) = -1 then
-    begin
-      AContent := StringReplace( AContent, string(ARegex.Match[0]), '', [rfReplaceAll]);
+      if FAssignVarStringMap.IndexOfName( parameter[1]) = -1 then
+      begin
+        AContent := StringReplace( AContent, string(ARegex.Match[0]), '', [rfReplaceAll]);
+        Result := True;
+        Exit;
+      end;
+
+      value1 := VarValue[ parameter[1]];
+      value2 := '';
+      if not ((parameter[3] = '''''') or (parameter[3] = '""')) then
+      begin
+        value2 := VarValue[ parameter[3]];
+      end;
+      condition := parameter[2];
+      if condition = '=' then condition := 'eq';
+      if condition = '<' then condition := 'lt';
+      if condition = '>' then condition := 'gt';
+      case condition of
+        'eq':
+          begin
+            if conditionIsEqual( value1, value2) then
+              s := string(ARegex.Match[2])
+            else
+              s := string(ARegex.Match[4]);
+            AContent := StringReplace( AContent, string(ARegex.Match[0]), s, [rfReplaceAll]);
+          end;
+
+        'neq':
+          begin
+            if conditionIsNotEqual( value1, value2) then
+              s := string(ARegex.Match[2])
+            else
+              s := string(ARegex.Match[4]);
+            AContent := StringReplace( AContent, string(ARegex.Match[0]), s, [rfReplaceAll]);
+          end;
+
+        'lt':
+          begin
+            if conditionIsLessThan( value1, value2) then
+              s := string(ARegex.Match[2])
+            else
+              s := string(ARegex.Match[4]);
+            AContent := StringReplace( AContent, string(ARegex.Match[0]), s, [rfReplaceAll]);
+          end;
+
+        'gt':
+          begin
+            if conditionIsGreaterThan( value1, value2) then
+              s := string(ARegex.Match[2])
+            else
+              s := string(ARegex.Match[4]);
+            AContent := StringReplace( AContent, string(ARegex.Match[0]), s, [rfReplaceAll]);
+          end;
+
+      end;
+
       Result := True;
-      Exit;
+    finally
+      FreeAndNil( parameter);
     end;
-
-    value1 := VarValue[ parameter[1]];
-    value2 := '';
-    if not ((parameter[3] = '''''') or (parameter[3] = '""')) then
-    begin
-      value2 := VarValue[ parameter[3]];
-    end;
-    condition := parameter[2];
-    if condition = '=' then condition := 'eq';
-    if condition = '<' then condition := 'lt';
-    if condition = '>' then condition := 'gt';
-    case condition of
-      'eq':
-        begin
-          if conditionIsEqual( value1, value2) then
-            s := string(ARegex.Match[2])
-          else
-            s := string(ARegex.Match[4]);
-          AContent := StringReplace( AContent, string(ARegex.Match[0]), s, [rfReplaceAll]);
-        end;
-
-      'neq':
-        begin
-          if conditionIsNotEqual( value1, value2) then
-            s := string(ARegex.Match[2])
-          else
-            s := string(ARegex.Match[4]);
-          AContent := StringReplace( AContent, string(ARegex.Match[0]), s, [rfReplaceAll]);
-        end;
-
-      'lt':
-        begin
-          if conditionIsLessThan( value1, value2) then
-            s := string(ARegex.Match[2])
-          else
-            s := string(ARegex.Match[4]);
-          AContent := StringReplace( AContent, string(ARegex.Match[0]), s, [rfReplaceAll]);
-        end;
-
-      'gt':
-        begin
-          if conditionIsGreaterThan( value1, value2) then
-            s := string(ARegex.Match[2])
-          else
-            s := string(ARegex.Match[4]);
-          AContent := StringReplace( AContent, string(ARegex.Match[0]), s, [rfReplaceAll]);
-        end;
-
-    end;
-
-    Result := True;
   end;
 
 const
   __CONDITIONAL_IF_VALUE = '([\.\$\?#@&A-Za-z0-9!,;:=<"''\''>_\|\(\)\\\/\-\n\r \[\]]+?)(\[else\]+)?([\.\$A-Za-z0-9=_ ]+)';
 
 var
-  parameter : TStrings;
-  condition,
-  s : string;
-  value1, value2 : variant;
   regex : TRegExpr;
 begin
-  s := '';
   Result := Content;
   regex := TRegExpr.Create;
   with regex do
@@ -1151,32 +1206,43 @@ begin
   end;
 end;
 
+// Variant comparison raises EVariantError when one side is numeric and the
+// other is a non-numeric string (ex: [if $count gt 0] with $count = '').
+// Fall back to a plain string comparison instead of killing the render.
 function TThemeUtil.conditionIsEqual(Value1, Value2: variant): boolean;
 begin
-  Result := False;
-  if Value1 = Value2 then
-    Result := True;
+  try
+    Result := Value1 = Value2;
+  except
+    Result := VarToStr(Value1) = VarToStr(Value2);
+  end;
 end;
 
 function TThemeUtil.conditionIsNotEqual(Value1, Value2: variant): boolean;
 begin
-  Result := False;
-  if Value1 <> Value2 then
-    Result := True;
+  try
+    Result := Value1 <> Value2;
+  except
+    Result := VarToStr(Value1) <> VarToStr(Value2);
+  end;
 end;
 
 function TThemeUtil.conditionIsLessThan(Value1, Value2: variant): boolean;
 begin
-  Result := False;
-  if Value1 < Value2 then
-    Result := True;
+  try
+    Result := Value1 < Value2;
+  except
+    Result := VarToStr(Value1) < VarToStr(Value2);
+  end;
 end;
 
 function TThemeUtil.conditionIsGreaterThan(Value1, Value2: variant): boolean;
 begin
-  Result := False;
-  if Value1 > Value2 then
-    Result := True;
+  try
+    Result := Value1 > Value2;
+  except
+    Result := VarToStr(Value1) > VarToStr(Value2);
+  end;
 end;
 
 function TThemeUtil.ForeachProcessor(TagProcessor: TReplaceTagEvent;
@@ -1268,10 +1334,11 @@ end;
 function TThemeUtil.ForeachProcessor_Table(TagProcessor: TReplaceTagEvent;
   KeyName, Content: string): string;
 var
-  html : string;
+  html, row : string;
   templateEngine : TFPTemplate;
   i : integer;
 begin
+  Result := '';
   if ( AssignVar[KeyName] = nil) then
   begin
     Exit;
@@ -1288,22 +1355,26 @@ begin
     else
       ThemeUtil.Assign('foreach_odd', 'even');
 
-    //tmp := RenderFromContent(@TagController, Content);
-
     templateEngine := TFPTemplate.Create;
-    templateEngine.Template := Content; // tmp
-    templateEngine.AllowTagParams := True;
-    templateEngine.StartDelimiter := FStartDelimiter;
-    templateEngine.EndDelimiter := FEndDelimiter;
-    templateEngine.ParamValueSeparator := '=';
-    templateEngine.OnReplaceTag := @ForeachProcessor_Table_TagController;
-    html := html + templateEngine.GetContent;
-    FreeAndNil(templateEngine);
+    try
+      templateEngine.Template := Content;
+      templateEngine.AllowTagParams := True;
+      templateEngine.StartDelimiter := FStartDelimiter;
+      templateEngine.EndDelimiter := FEndDelimiter;
+      templateEngine.ParamValueSeparator := '=';
+      templateEngine.OnReplaceTag := @ForeachProcessor_Table_TagController;
+      row := templateEngine.GetContent;
+    finally
+      FreeAndNil(templateEngine);
+    end;
 
-    html := RenderFromContent(@TagController, html);
+    // render only the current row; rendering the accumulated html made
+    // every previous row go through the tag processor again (O(n^2))
+    row := RenderFromContent(@TagController, row);
 
     //-- proccess conditional if
-    html := ConditionalIfProcessor( TagProcessor, html);
+    row := ConditionalIfProcessor( TagProcessor, row);
+    html := html + row;
 
     TSQLQuery( assignVarMap[KeyName]^).Next;
     i := i + 1;
@@ -1315,9 +1386,10 @@ function TThemeUtil.ForeachProcessor_Dataset(TagProcessor: TReplaceTagEvent;
   KeyName, Content: string): string;
 var
   i: integer;
-  html : string;
+  html, row : string;
   templateEngine : TFPTemplate;
 begin
+  Result := '';
   if ( AssignVar[KeyName] = nil) then
   begin
     Exit;
@@ -1329,19 +1401,23 @@ begin
   begin
     ThemeUtil.Assign('$index', i.ToString);
     templateEngine := TFPTemplate.Create;
-    templateEngine.Template := Content; // tmp
-    templateEngine.AllowTagParams := True;
-    templateEngine.StartDelimiter := FStartDelimiter;
-    templateEngine.EndDelimiter := FEndDelimiter;
-    templateEngine.ParamValueSeparator := '=';
-    templateEngine.OnReplaceTag := @ForeachProcessor_Dataset_TagController;
-    html := html + templateEngine.GetContent;
-    FreeAndNil(templateEngine);
+    try
+      templateEngine.Template := Content;
+      templateEngine.AllowTagParams := True;
+      templateEngine.StartDelimiter := FStartDelimiter;
+      templateEngine.EndDelimiter := FEndDelimiter;
+      templateEngine.ParamValueSeparator := '=';
+      templateEngine.OnReplaceTag := @ForeachProcessor_Dataset_TagController;
+      row := templateEngine.GetContent;
+    finally
+      FreeAndNil(templateEngine);
+    end;
 
-    html := RenderFromContent(@TagController, html);
+    row := RenderFromContent(@TagController, row);
 
     //-- proccess conditional if
-    html := ConditionalIfProcessor( TagProcessor, html);
+    row := ConditionalIfProcessor( TagProcessor, row);
+    html := html + row;
 
     TDataSet( assignVarMap[KeyName]^).Next;
     i := i + 1;
@@ -1355,6 +1431,7 @@ var
   templateEngine : TFPTemplate;
   i : integer;
 begin
+  Result := '';
   if ForeachTable_Keyname = '' then
     Exit;
   if ( AssignVar[KeyName] = nil) then
@@ -1525,6 +1602,7 @@ begin
       + TSQLQuery( assignVarMap[ForeachTable_Keyname]^).FieldByName(tagstring_custom.Values['index']).AsString;
     FAssignVarStringMap.Values[tagstring_custom.Values['assignto']]:=
       TSQLQuery( assignVarMap[ForeachTable_Keyname]^).FieldByName(tagstring_custom.Values['index']).AsString;
+    FreeAndNil( tagstring_custom);
     Exit;
   end;
   if tagstring_custom.Values['addassignto'] <> '' then
@@ -1682,8 +1760,13 @@ begin
 
   if tagstring_custom.Values['assignto'] <> '' then
   begin
-    FAssignVarStringMap.Values[tagstring_custom.Values['assignto']] :=
-      TJSONData( assignVarMap[ForeachTable_Keyname]^).Items[ foreachJsonIndex].FindPath( fieldName).AsString;
+    try
+      FAssignVarStringMap.Values[tagstring_custom.Values['assignto']] :=
+        TJSONData( assignVarMap[ForeachTable_Keyname]^).Items[ foreachJsonIndex].FindPath( fieldName).AsString;
+    except
+      FAssignVarStringMap.Values[tagstring_custom.Values['assignto']] := '';
+    end;
+    FreeAndNil( tagstring_custom);
     Exit;
   end;
 
@@ -1744,9 +1827,13 @@ begin
   FHits := TStringList.Create;
   FHitType := htNone;
   CacheTime := AppData.cacheTime; // default: 3 hours
-  HTMLUtil := THTMLUtil.Create;
+  // do not overwrite instances that already exist (would leak and drop
+  // callbacks registered before ThemeUtil was created)
+  if not Assigned(HTMLUtil) then
+    HTMLUtil := THTMLUtil.Create;
   RenderType:= rtSmarty;
-  ___TagCallbackMap := TTagCallbackMap.Create;
+  if not Assigned(___TagCallbackMap) then
+    ___TagCallbackMap := TTagCallbackMap.Create;
 end;
 
 destructor TThemeUtil.Destroy;
@@ -1849,7 +1936,12 @@ begin
   end;
   // check from AssignVar - end
 
-  if tagstring_custom.Count = 0 then Begin ReplaceText := '[]'; Exit; End;
+  if tagstring_custom.Count = 0 then
+  begin
+    ReplaceText := '[]';
+    FreeAndNil( tagstring_custom);
+    Exit;
+  end;
   tagname := tagstring_custom[0];
   case tagname of
     'sitename' : begin
@@ -1880,7 +1972,8 @@ begin
       begin
         ReplaceText := BaseURL + ReplaceText;
         ReplaceText := StringReplace( ReplaceText, '//', '/', [rfReplaceAll]);
-        ReplaceText := StringReplace( ReplaceText, 'https:/', 'https://', [rfReplaceAll]);
+        // restore the scheme separator for both http:// and https://
+        ReplaceText := StringReplace( ReplaceText, ':/', '://', []);
       end;
     end;
     '$theme'  : begin
@@ -2001,12 +2094,17 @@ begin
       if s <> '' then
       begin
         str := Explode( s, '|');
-        ReplaceText := '<div id="flashmessages" class="alert alert-warning alert-dismissable '+tagstring_custom.Values['class']+'"><h4><i class="icon fa fa-ban"></i> Warning!</h4><ul>';
-        for i:=0 to str.Count-1 do
-        begin
-          ReplaceText:= ReplaceText + '<li>'+str[i]+'</li>';
+        try
+          ReplaceText := '<div id="flashmessages" class="alert alert-warning alert-dismissable '+tagstring_custom.Values['class']+'"><h4><i class="icon fa fa-ban"></i> Warning!</h4><ul>';
+          for i:=0 to str.Count-1 do
+          begin
+            if str[i] = '' then Continue;
+            ReplaceText:= ReplaceText + '<li>'+str[i]+'</li>';
+          end;
+          ReplaceText:= ReplaceText + '</ul></div>';
+        finally
+          FreeAndNil( str);
         end;
-        ReplaceText:= ReplaceText + '</ul></div>';
         FlashMessages:='';
       end;
       end;
@@ -2091,11 +2189,12 @@ end;
 function TThemeUtil.Render(TagProcessorAddress: TReplaceTagEvent; const LayoutTemplateFile: string; Cache: boolean;
   SubModule: boolean): string;
 var
-  templateFilename, _ext, moduleActive: string;
+  templateFilename, _ext, moduleActive, relativeFile: string;
   templateEngine: TFPTemplate;
   response_json : TJSONObject;
 begin
-  if (not AppData.themeEnable) and (not Assigned(ThemeUtil)) then
+  Result := '';
+  if not AppData.themeEnable then
   begin
     FastPlasAppandler.DieRaise(__( __ERR_THEME_NOT_ENABLED),[]);
   end;
@@ -2112,7 +2211,7 @@ begin
 
   if not DirectoryExists('themes') then
   begin
-    Result := Result + Format( __(__Err_App_Init), [
+    Result := Format( __(__Err_App_Init), [
       'http://' + GetEnvironmentVariable('SERVER_NAME') + (GetEnvironmentVariable('SCRIPT_NAME'))
       + '/initialize/']);
     Exit;
@@ -2136,7 +2235,19 @@ begin
 
     if not FileExists(templateFilename) then
     begin
-      templateFilename := GetCurrentDir + LayoutTemplateFile;
+      // fallback: path relative to the web root (current dir).
+      // A leading "/" means "from the web root", not from the drive/fs root,
+      // ex: [include file="/modules/inbox/includes/thread.html"]
+      relativeFile := SetDirSeparators( trim( LayoutTemplateFile));
+      relativeFile := StringReplace( relativeFile, '"', '', [rfReplaceAll]);
+      relativeFile := StringReplace( relativeFile, '''', '', [rfReplaceAll]);
+      while (relativeFile <> '') and (relativeFile[1] = DirectorySeparator) do
+        Delete( relativeFile, 1, 1);
+      templateFilename := IncludeTrailingPathDelimiter( GetCurrentDir) + relativeFile;
+      // last resort: a real absolute path (ex: "D:\..." on Windows)
+      if (not FileExists(templateFilename)) and (ExtractFileDrive( LayoutTemplateFile) <> '')
+        and FileExists( LayoutTemplateFile) then
+        templateFilename := LayoutTemplateFile;
       if not FileExists(templateFilename) then
       begin
         Result := EchoError( __(__Err_Theme_Not_Exists), [ templateFilename, ThemeName]);
