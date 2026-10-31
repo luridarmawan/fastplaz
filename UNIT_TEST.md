@@ -61,8 +61,8 @@ Notes:
 
 `test_redis_lib` has two suites:
 
-* `TRedisLibOfflineTest` needs no server: defaults, port validation, `BulkPayload()`, master configuration, connection refused, connect timeout, unresolvable host, deprecated `Synch`.
-* `TRedisLibServerTest` talks to a real Redis server: SET/GET, special characters, code page tagged values, large values, INFO, numeric and multi bulk replies, error replies, inline commands, read timeout and reconnect, host name lookup, write to master.
+* `TRedisLibOfflineTest` needs no server: defaults, port validation, `BulkPayload()`, master configuration, connection refused, connect timeout, IPv6 literal forms, unreachable IPv6 address, unresolvable host, deprecated `Synch`.
+* `TRedisLibServerTest` talks to a real Redis server: SET/GET, special characters, code page tagged values, large values, INFO, numeric and multi bulk replies, error replies, inline commands, read timeout and reconnect, host name lookup, IPv6 loopback (`::1`, ignored when the server is IPv4 only), write to master.
 
 The server defaults to `127.0.0.1:6379`. When it is not reachable the whole `TRedisLibServerTest` suite is reported as *ignored*, not as failed, so the run still passes. Another server can be set through environment variables:
 
@@ -231,8 +231,8 @@ Catatan:
 
 `test_redis_lib` berisi dua suite:
 
-* `TRedisLibOfflineTest` tidak butuh server: nilai default, validasi port, `BulkPayload()`, konfigurasi master, koneksi ditolak, timeout connect, host tidak dikenal, `Synch` yang sudah deprecated.
-* `TRedisLibServerTest` memakai server Redis sungguhan: SET/GET, karakter khusus, nilai ber-codepage, nilai besar, INFO, balasan numerik dan multi bulk, balasan error, perintah inline, timeout baca dan reconnect, lookup nama host, tulis ke master.
+* `TRedisLibOfflineTest` tidak butuh server: nilai default, validasi port, `BulkPayload()`, konfigurasi master, koneksi ditolak, timeout connect, bentuk literal IPv6, alamat IPv6 tak terjangkau, host tidak dikenal, `Synch` yang sudah deprecated.
+* `TRedisLibServerTest` memakai server Redis sungguhan: SET/GET, karakter khusus, nilai ber-codepage, nilai besar, INFO, balasan numerik dan multi bulk, balasan error, perintah inline, timeout baca dan reconnect, lookup nama host, loopback IPv6 (`::1`, di-ignore jika server hanya IPv4), tulis ke master.
 
 Server default `127.0.0.1:6379`. Jika tidak bisa dihubungi, seluruh suite `TRedisLibServerTest` dilaporkan sebagai *ignored*, bukan gagal, sehingga run tetap lulus. Server lain bisa diatur lewat variabel lingkungan:
 

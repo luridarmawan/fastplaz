@@ -22,6 +22,11 @@ variable := Redis['thekey'];
 Redis.SendCommand(['HSET', 'user:1', 'name', 'Luri']);  // RESP array, any value is safe
 Redis.SendString('PING');                               // inline command
 
+[x] server address
+Redis.ServerAddress := '127.0.0.1';   // IPv4 literal
+Redis.ServerAddress := '::1';         // IPv6 literal, '[::1]' is accepted too
+Redis.ServerAddress := 'redis.local'; // host name, IPv4 is tried first, then IPv6
+
 USE MASTER SLAVE
 Redis := TRedisLib.Create;
 Redis.WriteToMaster := true;
@@ -50,7 +55,7 @@ uses
   WinSock2,
   {$endif}
   {$ifdef unix}
-  BaseUnix, UnixType,
+  BaseUnix, UnixType, netdb,
   {$endif}
   Sockets, resolve,
   {$endif}
@@ -82,6 +87,19 @@ type
     rrtMultiBulk, rrtUnknown,
     rrtNull);
 
+  {$ifdef fpcsocket}
+  // one connect candidate: an IPv4 or IPv6 socket address plus its text form
+  TRedisSockAddr = record
+    Family: longint;
+    Len: TSockLen;
+    Text: string;
+    case integer of
+      0: (v4: TInetSockAddr);
+      1: (v6: TInetSockAddr6);
+  end;
+  TRedisSockAddrList = array of TRedisSockAddr;
+  {$endif}
+
   { TRedisLib }
 
   TRedisLib = class(TObject)
@@ -99,6 +117,7 @@ type
     FTimeOut: integer;
     FWriteToMaster: boolean;
     FRedisMaster: TRedisLib;
+    FResolvedAddress: string;
     // raw bytes from the server, never passed through a code page conversion
     FRecvBuffer: RawByteString;
 
@@ -125,8 +144,10 @@ type
     procedure SetWriteToMaster(AValue: boolean);
 
     {$ifdef fpcsocket}
-    function ResolveAddress(out AAddr: TInetSockAddr): boolean;
-    function ConnectWithTimeout(const AAddr: TInetSockAddr): boolean;
+    function ResolveName4(const AHost: string; out AIp: in_addr): boolean;
+    function ResolveName6(const AHost: string; out AIp: in6_addr): boolean;
+    function ResolveAddresses(out AList: TRedisSockAddrList): boolean;
+    function ConnectWithTimeout(const AAddr: TRedisSockAddr): boolean;
     procedure ApplySocketTimeout;
     {$endif}
     procedure SetSocketError(const AMessage: string);
@@ -142,7 +163,10 @@ type
 
     property isConnected: boolean read FisConnected;
     property isAutoConnect: boolean read FisAutoConnect write FisAutoConnect;
+    // IPv4 or IPv6 literal ('127.0.0.1', '::1', '[::1]') or a host name
     property ServerAddress: string read FServerAddress write SetServerAddress;
+    // IP address the current/last connection was made to, '' when none
+    property ResolvedAddress: string read FResolvedAddress;
     property Port: string read FPort write SetPort;
     property TimeOut: integer read FTimeOut write SetTimeOut;
     property LastError: integer read FLastError;
@@ -380,46 +404,229 @@ begin
 end;
 
 {$ifdef fpcsocket}
-function TRedisLib.ResolveAddress(out AAddr: TInetSockAddr): boolean;
+
+{$ifdef windows}
+// FPC 3.2 ships no IPv6 capable resolver for Windows, use getaddrinfo from ws2_32
+// (the Sockets unit has already called WSAStartup)
+{$push}{$packrecords C}
+type
+  PRedisAddrInfo = ^TRedisAddrInfo;
+  TRedisAddrInfo = record
+    ai_flags: longint;
+    ai_family: longint;
+    ai_socktype: longint;
+    ai_protocol: longint;
+    ai_addrlen: SizeUInt;
+    ai_canonname: PAnsiChar;
+    ai_addr: psockaddr;
+    ai_next: PRedisAddrInfo;
+  end;
+{$pop}
+
+function getaddrinfo(nodename, servname: PAnsiChar; hints: PRedisAddrInfo;
+  out res: PRedisAddrInfo): longint; stdcall; external 'ws2_32.dll' name 'getaddrinfo';
+procedure freeaddrinfo(ai: PRedisAddrInfo); stdcall; external 'ws2_32.dll' name 'freeaddrinfo';
+{$endif}
+
+// RFC 5952 text form: lower case, no leading zeros, longest zero run as "::"
+// (NetAddrToStr6 from the Sockets unit gives "::0001" / "2001:0DB8::0001")
+function In6AddrToText(const AIp: in6_addr): string;
 var
-  ip: in_addr;
+  groups: array[0..7] of word;
+  i, runStart, runLen, bestStart, bestLen: integer;
+begin
+  for i := 0 to 7 do
+    groups[i] := (word(AIp.u6_addr8[i * 2]) shl 8) or AIp.u6_addr8[i * 2 + 1];
+
+  // longest run of zero groups, at least two groups long
+  bestStart := -1;
+  bestLen := 1;
+  i := 0;
+  while i < 8 do
+  begin
+    if groups[i] = 0 then
+    begin
+      runStart := i;
+      runLen := 0;
+      while (i < 8) and (groups[i] = 0) do
+      begin
+        Inc(runLen);
+        Inc(i);
+      end;
+      if runLen > bestLen then
+      begin
+        bestStart := runStart;
+        bestLen := runLen;
+      end;
+    end
+    else
+      Inc(i);
+  end;
+
+  Result := '';
+  i := 0;
+  while i < 8 do
+  begin
+    if i = bestStart then
+    begin
+      Result := Result + '::';
+      Inc(i, bestLen);
+      Continue;
+    end;
+    if (Result <> '') and (Result[Length(Result)] <> ':') then
+      Result := Result + ':';
+    Result := Result + LowerCase(IntToHex(groups[i], 1));
+    Inc(i);
+  end;
+end;
+
+// "[::1]:6379" / "127.0.0.1:6379"
+function EndpointText(const AAddr: TRedisSockAddr; const APort: string): string;
+begin
+  if AAddr.Family = AF_INET6 then
+    Result := '[' + AAddr.Text + ']:' + APort
+  else
+    Result := AAddr.Text + ':' + APort;
+end;
+
+function TRedisLib.ResolveName4(const AHost: string; out AIp: in_addr): boolean;
+var
   resolver: THostResolver;
 begin
-  Result := False;
-  FillChar(AAddr, SizeOf(AAddr), 0);
-  AAddr.sin_family := AF_INET;
-  AAddr.sin_port := htons(FPortInt);
-
-  ip := StrToNetAddr(FServerAddress);
-  if ip.s_addr = 0 then
-  begin
-    // not a dotted IPv4 literal, try a host name lookup
-    resolver := THostResolver.Create(nil);
-    try
-      if resolver.NameLookup(FServerAddress) then
-        ip := StrToNetAddr(resolver.AddressAsString);
-    finally
-      resolver.Free;
-    end;
+  AIp.s_addr := 0;
+  resolver := THostResolver.Create(nil);
+  try
+    if resolver.NameLookup(AHost) then
+      AIp := StrToNetAddr(resolver.AddressAsString);
+  finally
+    resolver.Free;
   end;
-  if ip.s_addr = 0 then
+  Result := AIp.s_addr <> 0;
+end;
+
+function TRedisLib.ResolveName6(const AHost: string; out AIp: in6_addr): boolean;
+{$ifdef windows}
+var
+  hints: TRedisAddrInfo;
+  results, p: PRedisAddrInfo;
+{$endif}
+{$ifdef unix}
+var
+  entry: THostEntry6;
+{$endif}
+begin
+  Result := False;
+  FillChar(AIp, SizeOf(AIp), 0);
+  {$ifdef windows}
+  FillChar(hints, SizeOf(hints), 0);
+  hints.ai_family := AF_INET6;
+  hints.ai_socktype := SOCK_STREAM;
+  results := nil;
+  if getaddrinfo(PAnsiChar(AHost), nil, @hints, results) <> 0 then
+    Exit;
+  try
+    p := results;
+    while (p <> nil) and not Result do
+    begin
+      if (p^.ai_family = AF_INET6) and (p^.ai_addr <> nil) and
+        (p^.ai_addrlen >= SizeOf(TInetSockAddr6)) then
+      begin
+        AIp := psockaddr_in6(p^.ai_addr)^.sin6_addr;
+        Result := True;
+      end;
+      p := p^.ai_next;
+    end;
+  finally
+    if results <> nil then
+      freeaddrinfo(results);
+  end;
+  {$endif}
+  {$ifdef unix}
+  // AAAA lookup through the FPC resolver (no libc needed)
+  if ResolveHostByName6(AHost, entry) then
+  begin
+    AIp := entry.Addr;
+    Result := True;
+  end;
+  {$endif}
+end;
+
+// candidates in the order they are tried: an IP literal gives exactly one,
+// a host name gives its IPv4 address first and its IPv6 address second
+function TRedisLib.ResolveAddresses(out AList: TRedisSockAddrList): boolean;
+var
+  host: string;
+  ip4: in_addr;
+  ip6: in6_addr;
+  n: integer;
+
+  procedure Add4(const AIp: in_addr);
+  begin
+    SetLength(AList, n + 1);
+    FillChar(AList[n].v6, SizeOf(AList[n].v6), 0);
+    AList[n].Family := AF_INET;
+    AList[n].Len := SizeOf(TInetSockAddr);
+    AList[n].Text := NetAddrToStr(AIp);
+    AList[n].v4.sin_family := AF_INET;
+    AList[n].v4.sin_port := htons(FPortInt);
+    AList[n].v4.sin_addr := AIp;
+    Inc(n);
+  end;
+
+  procedure Add6(const AIp: in6_addr);
+  begin
+    SetLength(AList, n + 1);
+    FillChar(AList[n].v6, SizeOf(AList[n].v6), 0);
+    AList[n].Family := AF_INET6;
+    AList[n].Len := SizeOf(TInetSockAddr6);
+    AList[n].Text := In6AddrToText(AIp);
+    {$if defined(freebsd) or defined(darwin) or defined(haiku)}
+    AList[n].v6.sin6_len := SizeOf(TInetSockAddr6);
+    {$endif}
+    AList[n].v6.sin6_family := AF_INET6;
+    AList[n].v6.sin6_port := htons(FPortInt);
+    AList[n].v6.sin6_addr := AIp;
+    Inc(n);
+  end;
+
+begin
+  AList := nil;
+  n := 0;
+  host := FServerAddress;
+  // "[::1]" as used in URLs
+  if (Length(host) > 2) and (host[1] = '[') and (host[Length(host)] = ']') then
+    host := Copy(host, 2, Length(host) - 2);
+
+  ip4 := StrToNetAddr(host);
+  if ip4.s_addr <> 0 then
+    Add4(ip4)
+  else if (Pos(':', host) > 0) and TryStrToHostAddr6(host, ip6) then
+    Add6(ip6)
+  else
+  begin
+    if ResolveName4(host, ip4) then
+      Add4(ip4);
+    if ResolveName6(host, ip6) then
+      Add6(ip6);
+  end;
+
+  Result := n > 0;
+  if not Result then
   begin
     FLastError := 1;
     FLastErrorMessage := 'cannot resolve host "' + FServerAddress + '"';
-    Exit;
   end;
-  AAddr.sin_addr.s_addr := ip.s_addr;
-  Result := True;
 end;
 
 // connect in non blocking mode and wait at most FTimeOut ms for the result,
 // a plain blocking connect can hang for a minute on a host that never answers
-function TRedisLib.ConnectWithTimeout(const AAddr: TInetSockAddr): boolean;
+function TRedisLib.ConnectWithTimeout(const AAddr: TRedisSockAddr): boolean;
 var
   rc, soError: longint;
   optLen: TSockLen;
   tv: TTimeVal;
   writeSet, errorSet: TFDSet;
+  endpoint: string;
   {$ifdef windows}
   nonBlocking: u_long;
   {$else}
@@ -427,11 +634,12 @@ var
   {$endif}
 begin
   Result := False;
+  endpoint := EndpointText(AAddr, FPort);
   if FTimeOut <= 0 then
   begin
-    Result := fpConnect(FSocket, @AAddr, SizeOf(AAddr)) = 0;
+    Result := fpConnect(FSocket, @AAddr.v4, AAddr.Len) = 0;
     if not Result then
-      SetSocketError('cannot connect to ' + FServerAddress + ':' + FPort);
+      SetSocketError('cannot connect to ' + endpoint);
     Exit;
   end;
 
@@ -447,7 +655,7 @@ begin
     Exit;
   end;
 
-  if fpConnect(FSocket, @AAddr, SizeOf(AAddr)) <> 0 then
+  if fpConnect(FSocket, @AAddr.v4, AAddr.Len) <> 0 then
   begin
     rc := SocketError;
     {$ifdef windows}
@@ -457,8 +665,7 @@ begin
     {$endif}
     begin
       FLastError := rc;
-      FLastErrorMessage := 'cannot connect to ' + FServerAddress + ':' + FPort +
-        ' (error ' + IntToStr(rc) + ')';
+      FLastErrorMessage := 'cannot connect to ' + endpoint + ' (error ' + IntToStr(rc) + ')';
       Exit;
     end;
 
@@ -484,13 +691,13 @@ begin
       {$else}
       FLastError := ESysETIMEDOUT;
       {$endif}
-      FLastErrorMessage := 'connection to ' + FServerAddress + ':' + FPort +
-        ' timed out after ' + IntToStr(FTimeOut) + ' ms';
+      FLastErrorMessage := 'connection to ' + endpoint + ' timed out after ' +
+        IntToStr(FTimeOut) + ' ms';
       Exit;
     end;
     if rc < 0 then
     begin
-      SetSocketError('select failed while connecting to ' + FServerAddress + ':' + FPort);
+      SetSocketError('select failed while connecting to ' + endpoint);
       Exit;
     end;
 
@@ -499,14 +706,13 @@ begin
     optLen := SizeOf(soError);
     if fpgetsockopt(FSocket, SOL_SOCKET, SO_ERROR, @soError, @optLen) <> 0 then
     begin
-      SetSocketError('cannot read the connect result for ' + FServerAddress + ':' + FPort);
+      SetSocketError('cannot read the connect result for ' + endpoint);
       Exit;
     end;
     if soError <> 0 then
     begin
       FLastError := soError;
-      FLastErrorMessage := 'cannot connect to ' + FServerAddress + ':' + FPort +
-        ' (error ' + IntToStr(soError) + ')';
+      FLastErrorMessage := 'cannot connect to ' + endpoint + ' (error ' + IntToStr(soError) + ')';
       Exit;
     end;
   end;
@@ -578,7 +784,8 @@ end;
 function TRedisLib.Connect: boolean;
 {$ifdef fpcsocket}
 var
-  addr: TInetSockAddr;
+  addrs: TRedisSockAddrList;
+  i: integer;
 {$endif}
 begin
   Result := FisConnected;
@@ -588,6 +795,7 @@ begin
   if FisConnected then
     exit;
   FRecvBuffer := '';
+  FResolvedAddress := '';
   try
     {$ifdef synapse}
     sock.SocksTimeout := FTimeOut;
@@ -602,20 +810,29 @@ begin
     {$endif}
 
     {$ifdef fpcsocket}
-    if not ResolveAddress(addr) then
+    if not ResolveAddresses(addrs) then
       Exit;
-    FSocket := fpSocket(AF_INET, SOCK_STREAM, 0);
-    if FSocket = -1 then
+    // try every candidate, the error of the last failed one is kept
+    for i := 0 to High(addrs) do
     begin
-      SetSocketError('cannot create socket');
-      Exit;
-    end;
-    if not ConnectWithTimeout(addr) then
-    begin
+      FSocket := fpSocket(addrs[i].Family, SOCK_STREAM, 0);
+      if FSocket = -1 then
+      begin
+        SetSocketError('cannot create a socket for ' + EndpointText(addrs[i], FPort));
+        Continue;
+      end;
+      if ConnectWithTimeout(addrs[i]) then
+      begin
+        FResolvedAddress := addrs[i].Text;
+        Break;
+      end;
       CloseSocket(FSocket);
       FSocket := -1;
-      Exit;
     end;
+    if FSocket = -1 then
+      Exit;
+    FLastError := 0;
+    FLastErrorMessage := '';
     ApplySocketTimeout;
     FisConnected := True;
     Result := True;
