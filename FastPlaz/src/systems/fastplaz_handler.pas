@@ -433,6 +433,7 @@ begin
   AppData.tempDir := string(Config.GetValue(_SYSTEM_TEMP_DIR, 'ztemp'));
   AppData.logDir := AppData.tempDir + DirectorySeparator + 'logs' + DirectorySeparator;
   AppData.cookiePath := string(Config.GetValue(_SYSTEM_COOKIE_PATH, ''));
+  AppData.trustProxy := Config.GetValue(_SYSTEM_TRUST_PROXY, False);
 
   if AppData.baseUrl = '' then
   begin
