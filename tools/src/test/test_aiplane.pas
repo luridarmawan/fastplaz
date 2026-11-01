@@ -1,0 +1,816 @@
+unit test_aiplane;
+
+{
+  AI Plane core tests.
+
+  TACPAdapterTest drives the real process layer against mock_acp_agent, which
+  run_tests.sh/.bat compile first (or point AIPLANE_MOCK_AGENT at a build).
+  TClaudeStreamTest feeds captured Claude Code stream-json lines straight into
+  the parser, so it needs no claude binary.
+}
+
+{$mode objfpc}{$H+}
+
+interface
+
+uses
+  Classes, SysUtils, fpcunit, testregistry,
+  aiplane_types, aiplane_process, aiplane_acp, aiplane_claude, aiplane_presets;
+
+type
+
+  { TAIEventRecorder }
+
+  TAIEventRecorder = class
+  public
+    Events: TStringList;
+    Text: string;
+    Thinking: string;
+    StopReason: string;
+    Done: boolean;
+    Errors: TStringList;
+    Tools: TStringList;
+    Sent: TStringList;
+    Permissions: array of TAIPermissionRequest;
+    AnswerPermission: string; // '' = leave pending, 'reject' = first reject option
+    BufferPath, BufferText: string;
+    constructor Create;
+    destructor Destroy; override;
+    procedure Reset;
+    procedure OnEvent(Sender: TObject; const AEvent: TAIEvent);
+    procedure OnPermission(Sender: TObject; const ARequest: TAIPermissionRequest);
+    function OnReadFile(Sender: TObject; const APath: string; out AContent: string): boolean;
+  end;
+
+  { TAIPlaneHelpersTest }
+
+  TAIPlaneHelpersTest = class(TTestCase)
+  published
+    procedure TestFindExecutableOnPath;
+    procedure TestFindExecutableMissing;
+    procedure TestToolStatusFromString;
+    procedure TestPresetCreatesAdapter;
+    procedure TestPresetOverridesCommand;
+    procedure TestUnknownPresetRaises;
+    procedure TestClaudeEffortArg;
+  end;
+
+  { TACPAdapterTest }
+
+  TACPAdapterTest = class(TTestCase)
+  private
+    FAdapter: TACPAdapter;
+    FRec: TAIEventRecorder;
+    FTempFile: string;
+    procedure WaitDone(ATimeoutMs: integer = 10000);
+    procedure WaitFor(const AText: string; ATimeoutMs: integer = 10000);
+    procedure PromptAndWait(const AText: string);
+    procedure BusyPrompt;
+  protected
+    procedure SetUp; override;
+    procedure TearDown; override;
+  published
+    procedure TestQueuedPromptStartsRuntime;
+    procedure TestModelsFromConfigOptions;
+    procedure TestSecondTurnReusesProcess;
+    procedure TestThinkingChunk;
+    procedure TestPlanUpdate;
+    procedure TestReadFileWithLineAndLimit;
+    procedure TestReadFileFromEditorBuffer;
+    procedure TestReadMissingFileFails;
+    procedure TestPermissionAllow;
+    procedure TestPermissionAnsweredLater;
+    procedure TestPermissionWithoutHandlerRejects;
+    procedure TestCancelStopsTurn;
+    procedure TestCancelAnswersPendingPermission;
+    procedure TestPromptWhileBusyRaises;
+    procedure TestPromptError;
+    procedure TestRuntimeCrashThenRestart;
+    procedure TestModelAndEffortBeforeStart;
+    procedure TestModelChangeWhileReady;
+    procedure TestUnknownEffortIgnored;
+    procedure TestNonJSONBannerIgnored;
+    procedure TestUnicodeText;
+    procedure TestNewSession;
+    procedure TestMissingExecutable;
+    procedure TestStopThenPromptRestarts;
+  end;
+
+  { TClaudeStreamTest }
+
+  TClaudeStreamTest = class(TTestCase)
+  private
+    FAdapter: TClaudeStreamAdapter;
+    FRec: TAIEventRecorder;
+  protected
+    procedure SetUp; override;
+    procedure TearDown; override;
+  published
+    procedure TestInitSetsSession;
+    procedure TestTextDeltas;
+    procedure TestAssistantTextNotDoubled;
+    procedure TestAssistantTextWithoutDeltas;
+    procedure TestThinkingDelta;
+    procedure TestToolUseAndResult;
+    procedure TestToolResultError;
+    procedure TestResultSuccess;
+    procedure TestResultError;
+    procedure TestPermissionAllowResponse;
+    procedure TestPermissionDenyResponse;
+    procedure TestIgnoresGarbage;
+    procedure TestArguments;
+    procedure TestStaticModels;
+  end;
+
+implementation
+
+type
+  TClaudeArgsProbe = class(TClaudeStreamAdapter)
+  public
+    procedure Probe(AArgs: TStrings);
+  end;
+
+procedure TClaudeArgsProbe.Probe(AArgs: TStrings);
+begin
+  BuildArguments(AArgs);
+end;
+
+function MockAgentPath: string;
+begin
+  Result := GetEnvironmentVariable('AIPLANE_MOCK_AGENT');
+  if Result = '' then
+    Result := ExpandFileName('mock_acp_agent' + ExtractFileExt(ParamStr(0)));
+end;
+
+{ TAIEventRecorder }
+
+constructor TAIEventRecorder.Create;
+begin
+  Events := TStringList.Create;
+  Errors := TStringList.Create;
+  Tools := TStringList.Create;
+  Sent := TStringList.Create;
+  AnswerPermission := 'allow';
+end;
+
+destructor TAIEventRecorder.Destroy;
+begin
+  Sent.Free;
+  Tools.Free;
+  Errors.Free;
+  Events.Free;
+  inherited Destroy;
+end;
+
+procedure TAIEventRecorder.Reset;
+begin
+  Events.Clear;
+  Errors.Clear;
+  Tools.Clear;
+  Sent.Clear;
+  Text := '';
+  Thinking := '';
+  StopReason := '';
+  Done := False;
+  SetLength(Permissions, 0);
+end;
+
+procedure TAIEventRecorder.OnEvent(Sender: TObject; const AEvent: TAIEvent);
+const
+  STATUS: array[TAIToolStatus] of string = ('pending', 'running', 'completed', 'failed');
+begin
+  case AEvent.Kind of
+    aekText: Text := Text + AEvent.Text;
+    aekThinking: Thinking := Thinking + AEvent.Text;
+    aekError: Errors.Add(AEvent.Text);
+    aekToolCall, aekToolUpdate:
+      Tools.Add(Format('%s %s %s %s|%s', [AEvent.ToolCallId, STATUS[AEvent.ToolStatus],
+        AEvent.ToolTitle, AEvent.ToolPath, Trim(AEvent.Text)]));
+    aekDone:
+    begin
+      Done := True;
+      StopReason := AEvent.StopReason;
+    end;
+    aekLog:
+      if Copy(AEvent.Text, 1, 3) = '>> ' then
+        Sent.Add(Copy(AEvent.Text, 4, MaxInt));
+  end;
+  if AEvent.Kind <> aekLog then
+    Events.Add(IntToStr(Ord(AEvent.Kind)) + ':' + AEvent.Text);
+end;
+
+procedure TAIEventRecorder.OnPermission(Sender: TObject;
+  const ARequest: TAIPermissionRequest);
+var
+  i: integer;
+begin
+  SetLength(Permissions, Length(Permissions) + 1);
+  Permissions[High(Permissions)] := ARequest;
+  if AnswerPermission = '' then
+    Exit;
+  for i := 0 to High(ARequest.Options) do
+    if Pos(AnswerPermission, ARequest.Options[i].Kind) = 1 then
+    begin
+      TAIAdapter(Sender).RespondPermission(ARequest.Key, ARequest.Options[i].Id);
+      Exit;
+    end;
+end;
+
+function TAIEventRecorder.OnReadFile(Sender: TObject; const APath: string;
+  out AContent: string): boolean;
+begin
+  Result := (BufferPath <> '') and SameFileName(APath, BufferPath);
+  if Result then
+    AContent := BufferText;
+end;
+
+{ TAIPlaneHelpersTest }
+
+procedure TAIPlaneHelpersTest.TestFindExecutableOnPath;
+begin
+  {$IFDEF WINDOWS}
+  AssertTrue(AIFindExecutable('cmd') <> '');
+  {$ELSE}
+  AssertTrue(AIFindExecutable('sh') <> '');
+  {$ENDIF}
+end;
+
+procedure TAIPlaneHelpersTest.TestFindExecutableMissing;
+begin
+  AssertEquals('', AIFindExecutable('no_such_runtime_fastplaz'));
+  AssertEquals('', AIFindExecutable(''));
+  AssertEquals('', AIFindExecutable(ExpandFileName('no_such_dir' + PathDelim + 'x')));
+end;
+
+procedure TAIPlaneHelpersTest.TestToolStatusFromString;
+begin
+  AssertTrue(AIToolStatusFromString('pending') = atsPending);
+  AssertTrue(AIToolStatusFromString('in_progress') = atsRunning);
+  AssertTrue(AIToolStatusFromString('completed') = atsCompleted);
+  AssertTrue(AIToolStatusFromString('failed') = atsFailed);
+  AssertTrue(AIToolStatusFromString('???') = atsPending);
+end;
+
+procedure TAIPlaneHelpersTest.TestPresetCreatesAdapter;
+var
+  a: TAIAdapter;
+begin
+  a := AICreateAdapter(AI_PRESET_OPENCODE);
+  try
+    AssertTrue(a is TACPAdapter);
+    AssertEquals('opencode', a.Command);
+    AssertEquals(1, a.Arguments.Count);
+    AssertEquals('acp', a.Arguments[0]);
+  finally
+    a.Free;
+  end;
+  a := AICreateAdapter(AI_PRESET_CLAUDE);
+  try
+    AssertTrue(a is TClaudeStreamAdapter);
+    AssertEquals('claude', a.Command);
+    AssertEquals(0, a.Arguments.Count);
+  finally
+    a.Free;
+  end;
+  AssertTrue(AIPresetCount >= 3);
+end;
+
+procedure TAIPlaneHelpersTest.TestPresetOverridesCommand;
+var
+  a: TAIAdapter;
+begin
+  a := AICreateAdapter(AI_PRESET_PI, 'C:\tools\my agent.exe', '--x --y');
+  try
+    AssertEquals('C:\tools\my agent.exe', a.Command);
+    AssertEquals(2, a.Arguments.Count);
+    AssertEquals('--y', a.Arguments[1]);
+  finally
+    a.Free;
+  end;
+end;
+
+procedure TAIPlaneHelpersTest.TestUnknownPresetRaises;
+var
+  raised: boolean;
+begin
+  raised := False;
+  try
+    AICreateAdapter('nope').Free;
+  except
+    on EAIAdapter do
+      raised := True;
+  end;
+  AssertTrue(raised);
+end;
+
+procedure TAIPlaneHelpersTest.TestClaudeEffortArg;
+begin
+  AssertEquals('', ClaudeEffortArg(''));
+  AssertEquals('', ClaudeEffortArg('auto'));
+  AssertEquals('low', ClaudeEffortArg('off'));
+  AssertEquals('low', ClaudeEffortArg('minimal'));
+  AssertEquals('medium', ClaudeEffortArg('Medium'));
+  AssertEquals('xhigh', ClaudeEffortArg('xhigh'));
+end;
+
+{ TACPAdapterTest }
+
+procedure TACPAdapterTest.SetUp;
+begin
+  if not FileExists(MockAgentPath) then
+    Ignore('mock_acp_agent not built: ' + MockAgentPath);
+  FRec := TAIEventRecorder.Create;
+  FAdapter := TACPAdapter.Create;
+  FAdapter.Command := MockAgentPath;
+  FAdapter.OnEvent := @FRec.OnEvent;
+  FAdapter.OnPermission := @FRec.OnPermission;
+  FAdapter.OnReadFile := @FRec.OnReadFile;
+  FTempFile := '';
+end;
+
+procedure TACPAdapterTest.TearDown;
+begin
+  FreeAndNil(FAdapter);
+  FreeAndNil(FRec);
+  if (FTempFile <> '') and FileExists(FTempFile) then
+    DeleteFile(FTempFile);
+end;
+
+procedure TACPAdapterTest.WaitDone(ATimeoutMs: integer);
+var
+  t: QWord;
+begin
+  t := GetTickCount64;
+  while not FRec.Done do
+  begin
+    if GetTickCount64 - t > QWord(ATimeoutMs) then
+      Fail('Timed out waiting for the turn to finish. Events: ' + FRec.Events.CommaText);
+    if not FAdapter.Poll then
+      Sleep(5);
+  end;
+end;
+
+procedure TACPAdapterTest.WaitFor(const AText: string; ATimeoutMs: integer);
+var
+  t: QWord;
+begin
+  t := GetTickCount64;
+  while Pos(AText, FRec.Text) = 0 do
+  begin
+    if GetTickCount64 - t > QWord(ATimeoutMs) then
+      Fail('Timed out waiting for "' + AText + '". Text: ' + FRec.Text);
+    if not FAdapter.Poll then
+      Sleep(5);
+  end;
+end;
+
+procedure TACPAdapterTest.PromptAndWait(const AText: string);
+begin
+  FRec.Reset;
+  FAdapter.Prompt(AText);
+  WaitDone;
+end;
+
+procedure TACPAdapterTest.BusyPrompt;
+begin
+  FAdapter.Prompt('hello');
+end;
+
+procedure TACPAdapterTest.TestQueuedPromptStartsRuntime;
+begin
+  AssertTrue(FAdapter.State = aasIdle);
+  FAdapter.Prompt('hello');
+  AssertTrue('starting while the handshake runs', FAdapter.State = aasStarting);
+  WaitDone;
+  AssertEquals('Hello from mock', FRec.Text);
+  AssertEquals('end_turn', FRec.StopReason);
+  AssertTrue(FAdapter.State = aasReady);
+  AssertEquals('mock_session_1', FAdapter.SessionId);
+  AssertEquals('MockAgent', FAdapter.AgentName);
+  AssertEquals(0, FRec.Errors.Count);
+end;
+
+procedure TACPAdapterTest.TestModelsFromConfigOptions;
+begin
+  PromptAndWait('hello');
+  AssertEquals(2, Length(FAdapter.Models));
+  AssertEquals('mock/fast', FAdapter.Models[0].Id);
+  AssertEquals('Mock Fast', FAdapter.Models[0].Name);
+  AssertEquals('grouped options are flattened', 'mock/smart', FAdapter.Models[1].Id);
+end;
+
+procedure TACPAdapterTest.TestSecondTurnReusesProcess;
+begin
+  PromptAndWait('hello');
+  PromptAndWait('second');
+  AssertEquals('echo: second', FRec.Text);
+  AssertEquals('mock_session_1', FAdapter.SessionId);
+  AssertEquals('no second handshake', -1, FRec.Sent.Text.IndexOf('"initialize"'));
+end;
+
+procedure TACPAdapterTest.TestThinkingChunk;
+begin
+  PromptAndWait('think');
+  AssertEquals('Let me think.', FRec.Thinking);
+  AssertEquals('Done thinking.', FRec.Text);
+end;
+
+procedure TACPAdapterTest.TestPlanUpdate;
+var
+  i: integer;
+  found: boolean;
+begin
+  PromptAndWait('plan');
+  found := False;
+  for i := 0 to FRec.Events.Count - 1 do
+    if Pos(IntToStr(Ord(aekPlan)) + ':[completed] Read the unit', FRec.Events[i]) = 1 then
+      found := Pos('[pending] Write the test', FRec.Events[i]) > 0;
+  AssertTrue('plan event with both entries', found);
+end;
+
+procedure TACPAdapterTest.TestReadFileWithLineAndLimit;
+var
+  list: TStringList;
+begin
+  FTempFile := GetTempFileName('', 'aiplane');
+  list := TStringList.Create;
+  try
+    list.Add('first');
+    list.Add('second');
+    list.Add('third');
+    list.SaveToFile(FTempFile);
+  finally
+    list.Free;
+  end;
+  PromptAndWait('read ' + FTempFile);
+  AssertEquals('line 2: second', FRec.Text);
+  AssertEquals(2, FRec.Tools.Count);
+  AssertEquals('call_1 pending Read ' + ExtractFileName(FTempFile) + ' ' + FTempFile + '|',
+    FRec.Tools[0]);
+  AssertEquals('call_1 completed  |second', FRec.Tools[1]);
+end;
+
+procedure TACPAdapterTest.TestReadFileFromEditorBuffer;
+begin
+  FTempFile := GetTempFileName('', 'aiplane');
+  FRec.BufferPath := FTempFile;
+  FRec.BufferText := 'one' + LineEnding + 'unsaved' + LineEnding + 'three';
+  PromptAndWait('read ' + FTempFile);
+  AssertEquals('the editor buffer wins over the missing file', 'line 2: unsaved', FRec.Text);
+end;
+
+procedure TACPAdapterTest.TestReadMissingFileFails;
+begin
+  PromptAndWait('read ' + ExpandFileName('no_such_file_aiplane.txt'));
+  AssertEquals('read failed', FRec.Text);
+  AssertTrue(Pos('"error"', FRec.Sent.Text) > 0);
+end;
+
+procedure TACPAdapterTest.TestPermissionAllow;
+begin
+  PromptAndWait('permission');
+  AssertEquals(1, Length(FRec.Permissions));
+  AssertEquals('Delete temp.txt', FRec.Permissions[0].ToolTitle);
+  AssertEquals('delete', FRec.Permissions[0].ToolKind);
+  AssertEquals(2, Length(FRec.Permissions[0].Options));
+  AssertTrue(Pos('temp.txt', FRec.Permissions[0].Detail) > 0);
+  AssertEquals('permission: yes', FRec.Text);
+end;
+
+procedure TACPAdapterTest.TestPermissionAnsweredLater;
+var
+  t: QWord;
+begin
+  FRec.AnswerPermission := '';
+  FRec.Reset;
+  FAdapter.Prompt('permission');
+  t := GetTickCount64;
+  while Length(FRec.Permissions) = 0 do
+  begin
+    if GetTickCount64 - t > 10000 then
+      Fail('no permission request');
+    if not FAdapter.Poll then
+      Sleep(5);
+  end;
+  // The agent waits while the user decides.
+  t := GetTickCount64;
+  while GetTickCount64 - t < 200 do
+    FAdapter.Poll;
+  AssertFalse(FRec.Done);
+  FAdapter.RespondPermission(FRec.Permissions[0].Key, 'no');
+  WaitDone;
+  AssertEquals('permission: no', FRec.Text);
+  // A second answer for the same key is ignored.
+  FAdapter.RespondPermission(FRec.Permissions[0].Key, 'yes');
+end;
+
+procedure TACPAdapterTest.TestPermissionWithoutHandlerRejects;
+begin
+  FAdapter.OnPermission := nil;
+  PromptAndWait('permission');
+  AssertEquals('permission: no', FRec.Text);
+end;
+
+procedure TACPAdapterTest.TestCancelStopsTurn;
+begin
+  FRec.Reset;
+  FAdapter.Prompt('slow');
+  WaitFor('1 ');
+  FAdapter.Cancel;
+  WaitDone;
+  AssertEquals('cancelled', FRec.StopReason);
+  AssertTrue('stopped early: ' + FRec.Text, Pos('20 ', FRec.Text) = 0);
+  AssertTrue(FAdapter.State = aasReady);
+end;
+
+procedure TACPAdapterTest.TestCancelAnswersPendingPermission;
+var
+  t: QWord;
+begin
+  FRec.AnswerPermission := '';
+  FRec.Reset;
+  FAdapter.Prompt('permission');
+  t := GetTickCount64;
+  while Length(FRec.Permissions) = 0 do
+  begin
+    if GetTickCount64 - t > 10000 then
+      Fail('no permission request');
+    if not FAdapter.Poll then
+      Sleep(5);
+  end;
+  FAdapter.Cancel;
+  WaitDone;
+  AssertEquals('permission: cancelled', FRec.Text);
+  AssertEquals('cancelled', FRec.StopReason);
+end;
+
+procedure TACPAdapterTest.TestPromptWhileBusyRaises;
+begin
+  FRec.Reset;
+  FAdapter.Prompt('slow');
+  WaitFor('1 ');
+  AssertException(EAIAdapter, @BusyPrompt);
+  FAdapter.Cancel;
+  WaitDone;
+end;
+
+procedure TACPAdapterTest.TestPromptError;
+begin
+  PromptAndWait('fail');
+  AssertEquals('error', FRec.StopReason);
+  AssertEquals(1, FRec.Errors.Count);
+  AssertTrue(Pos('mock failure', FRec.Errors[0]) > 0);
+  AssertTrue('the session is still usable', FAdapter.State = aasReady);
+  PromptAndWait('hello');
+  AssertEquals('Hello from mock', FRec.Text);
+end;
+
+procedure TACPAdapterTest.TestRuntimeCrashThenRestart;
+begin
+  PromptAndWait('crash');
+  AssertEquals('about to crash', FRec.Text);
+  AssertEquals('error', FRec.StopReason);
+  AssertTrue(FRec.Errors.Count > 0);
+  AssertTrue(Pos('code 3', FRec.Errors[0]) > 0);
+  AssertTrue(FAdapter.State = aasFailed);
+  PromptAndWait('hello');
+  AssertEquals('Hello from mock', FRec.Text);
+  AssertTrue(FAdapter.State = aasReady);
+end;
+
+procedure TACPAdapterTest.TestModelAndEffortBeforeStart;
+begin
+  FAdapter.Model := 'mock/smart';
+  FAdapter.Effort := 'high';
+  PromptAndWait('model?');
+  AssertEquals('model=mock/smart effort=high', FRec.Text);
+end;
+
+procedure TACPAdapterTest.TestModelChangeWhileReady;
+begin
+  PromptAndWait('hello');
+  FAdapter.Model := 'mock/smart';
+  PromptAndWait('model?');
+  AssertEquals('model=mock/smart effort=medium', FRec.Text);
+end;
+
+procedure TACPAdapterTest.TestUnknownEffortIgnored;
+begin
+  FAdapter.Effort := 'xhigh';
+  PromptAndWait('model?');
+  AssertEquals('model=mock/fast effort=medium', FRec.Text);
+  AssertEquals(0, FRec.Errors.Count);
+end;
+
+procedure TACPAdapterTest.TestNonJSONBannerIgnored;
+begin
+  FAdapter.Arguments.Add('--banner');
+  PromptAndWait('hello');
+  AssertEquals('Hello from mock', FRec.Text);
+end;
+
+procedure TACPAdapterTest.TestUnicodeText;
+begin
+  PromptAndWait('unicode');
+  AssertEquals('Halo dunia ' + #$E2#$9C#$93 + ' caf' + #$C3#$A9, FRec.Text);
+end;
+
+procedure TACPAdapterTest.TestNewSession;
+var
+  t: QWord;
+begin
+  PromptAndWait('hello');
+  FAdapter.NewSession;
+  t := GetTickCount64;
+  while FAdapter.State <> aasReady do
+  begin
+    if GetTickCount64 - t > 10000 then
+      Fail('new session not ready');
+    if not FAdapter.Poll then
+      Sleep(5);
+  end;
+  AssertEquals('mock_session_2', FAdapter.SessionId);
+  PromptAndWait('hello');
+  AssertEquals('Hello from mock', FRec.Text);
+end;
+
+procedure TACPAdapterTest.TestMissingExecutable;
+begin
+  FAdapter.Command := 'no_such_runtime_fastplaz';
+  PromptAndWait('hello');
+  AssertEquals('error', FRec.StopReason);
+  AssertTrue(Pos('not found', FRec.Errors.Text) > 0);
+  AssertTrue(FAdapter.State = aasFailed);
+end;
+
+procedure TACPAdapterTest.TestStopThenPromptRestarts;
+begin
+  PromptAndWait('hello');
+  FAdapter.Stop;
+  AssertTrue(FAdapter.State = aasStopped);
+  AssertEquals('', FAdapter.SessionId);
+  PromptAndWait('again');
+  AssertEquals('echo: again', FRec.Text);
+end;
+
+{ TClaudeStreamTest }
+
+procedure TClaudeStreamTest.SetUp;
+begin
+  FRec := TAIEventRecorder.Create;
+  FAdapter := TClaudeStreamAdapter.Create;
+  FAdapter.OnEvent := @FRec.OnEvent;
+  FAdapter.OnPermission := @FRec.OnPermission;
+end;
+
+procedure TClaudeStreamTest.TearDown;
+begin
+  FreeAndNil(FAdapter);
+  FreeAndNil(FRec);
+end;
+
+procedure TClaudeStreamTest.TestInitSetsSession;
+begin
+  FAdapter.HandleLine('{"type":"system","subtype":"init","cwd":"D:\\x","session_id":"abc-123","model":"claude-haiku-5-5","tools":["Read"]}');
+  AssertEquals('abc-123', FAdapter.SessionId);
+  AssertTrue(Pos('model: claude-haiku-5-5', FRec.Events.Text) > 0);
+end;
+
+procedure TClaudeStreamTest.TestTextDeltas;
+begin
+  FAdapter.HandleLine('{"type":"stream_event","event":{"type":"message_start","message":{}}}');
+  FAdapter.HandleLine('{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hero "}}}');
+  FAdapter.HandleLine('{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"v0.12"}}}');
+  AssertEquals('Hero v0.12', FRec.Text);
+end;
+
+procedure TClaudeStreamTest.TestAssistantTextNotDoubled;
+begin
+  FAdapter.HandleLine('{"type":"stream_event","event":{"type":"message_start","message":{}}}');
+  FAdapter.HandleLine('{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"pong"}}}');
+  FAdapter.HandleLine('{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"pong"}]}}');
+  AssertEquals('pong', FRec.Text);
+end;
+
+procedure TClaudeStreamTest.TestAssistantTextWithoutDeltas;
+begin
+  FAdapter.HandleLine('{"type":"stream_event","event":{"type":"message_start","message":{}}}');
+  FAdapter.HandleLine('{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"whole"}]}}');
+  AssertEquals('whole', FRec.Text);
+end;
+
+procedure TClaudeStreamTest.TestThinkingDelta;
+begin
+  FAdapter.HandleLine('{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}}');
+  AssertEquals('hmm', FRec.Thinking);
+  AssertEquals('', FRec.Text);
+end;
+
+procedure TClaudeStreamTest.TestToolUseAndResult;
+begin
+  FAdapter.HandleLine('{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"Read","input":{}}}}');
+  FAdapter.HandleLine('{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"D:\\a\\version.txt"}}]}}');
+  FAdapter.HandleLine('{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":[{"type":"text","text":"1\tHero v0.12.06"}]}]}}');
+  AssertEquals(3, FRec.Tools.Count);
+  AssertEquals('toolu_1 pending Read |', FRec.Tools[0]);
+  AssertEquals('toolu_1 running Read D:\a\version.txt|{ "file_path" : "D:\\a\\version.txt" }', FRec.Tools[1]);
+  AssertEquals('toolu_1 completed  |1'#9'Hero v0.12.06', FRec.Tools[2]);
+end;
+
+procedure TClaudeStreamTest.TestToolResultError;
+begin
+  FAdapter.HandleLine('{"type":"user","message":{"content":[{"tool_use_id":"toolu_2","type":"tool_result","is_error":true,"content":"File does not exist."}]}}');
+  AssertEquals('toolu_2 failed  |File does not exist.', FRec.Tools[0]);
+end;
+
+procedure TClaudeStreamTest.TestResultSuccess;
+begin
+  FAdapter.HandleLine('{"type":"result","subtype":"success","is_error":false,"result":"pong","stop_reason":"end_turn","session_id":"s1","total_cost_usd":0.0027,"usage":{"input_tokens":4,"output_tokens":87}}');
+  AssertTrue(FRec.Done);
+  AssertEquals('end_turn', FRec.StopReason);
+  AssertEquals('s1', FAdapter.SessionId);
+  AssertEquals(0, FRec.Errors.Count);
+  AssertTrue(FRec.Events.Text, Pos('in 4, out 87, cost $0.0027', FRec.Events.Text) > 0);
+end;
+
+procedure TClaudeStreamTest.TestResultError;
+begin
+  FAdapter.HandleLine('{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: overloaded","session_id":"s1"}');
+  AssertTrue(FRec.Done);
+  AssertEquals('error', FRec.StopReason);
+  AssertEquals('API Error: overloaded', FRec.Errors[0]);
+end;
+
+procedure TClaudeStreamTest.TestPermissionAllowResponse;
+var
+  sent: string;
+begin
+  FAdapter.HandleLine('{"type":"control_request","request_id":"req_7","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"toolu_9","input":{"command":"echo hi"}}}');
+  AssertEquals(1, Length(FRec.Permissions));
+  AssertEquals('Bash', FRec.Permissions[0].ToolTitle);
+  AssertEquals('allow', FRec.Permissions[0].Options[0].Id);
+  AssertEquals(1, FRec.Sent.Count);
+  sent := FRec.Sent[0];
+  AssertTrue(sent, Pos('"type" : "control_response"', sent) > 0);
+  AssertTrue(sent, Pos('"request_id" : "req_7"', sent) > 0);
+  AssertTrue(sent, Pos('"behavior" : "allow"', sent) > 0);
+  AssertTrue(sent, Pos('"updatedInput" : { "command" : "echo hi" }', sent) > 0);
+end;
+
+procedure TClaudeStreamTest.TestPermissionDenyResponse;
+begin
+  FRec.AnswerPermission := 'reject';
+  FAdapter.HandleLine('{"type":"control_request","request_id":"req_8","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"x"}}}');
+  AssertEquals(1, FRec.Sent.Count);
+  AssertTrue(Pos('"behavior" : "deny"', FRec.Sent[0]) > 0);
+end;
+
+procedure TClaudeStreamTest.TestIgnoresGarbage;
+begin
+  FAdapter.HandleLine('not json');
+  FAdapter.HandleLine('[1,2]');
+  FAdapter.HandleLine('{"type":"rate_limit_event"}');
+  AssertEquals(0, FRec.Events.Count);
+end;
+
+procedure TClaudeStreamTest.TestArguments;
+var
+  probe: TClaudeArgsProbe;
+  args: TStringList;
+begin
+  probe := TClaudeArgsProbe.Create;
+  args := TStringList.Create;
+  try
+    probe.Probe(args);
+    AssertTrue(args.IndexOf('--model') < 0);
+    AssertTrue(args.IndexOf('--effort') < 0);
+    AssertTrue(args.IndexOf('stream-json') > 0);
+    AssertTrue(args.IndexOf('stdio') > 0);
+    args.Clear;
+    probe.Model := 'sonnet';
+    probe.Effort := 'minimal';
+    probe.HandleLine('{"type":"system","subtype":"init","session_id":"sid-1"}');
+    probe.Arguments.Add('--extra');
+    probe.Probe(args);
+    AssertEquals('sonnet', args[args.IndexOf('--model') + 1]);
+    AssertEquals('low', args[args.IndexOf('--effort') + 1]);
+    AssertEquals('sid-1', args[args.IndexOf('--resume') + 1]);
+    AssertEquals('--extra', args[args.Count - 1]);
+  finally
+    args.Free;
+    probe.Free;
+  end;
+end;
+
+procedure TClaudeStreamTest.TestStaticModels;
+begin
+  AssertEquals(3, Length(FAdapter.Models));
+  AssertEquals('opus', FAdapter.Models[0].Id);
+end;
+
+initialization
+  RegisterTest(TAIPlaneHelpersTest);
+  RegisterTest(TACPAdapterTest);
+  RegisterTest(TClaudeStreamTest);
+
+end.
