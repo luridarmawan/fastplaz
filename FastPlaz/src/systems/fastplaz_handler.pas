@@ -76,7 +76,6 @@ type
   //TMyCustomWebModule  = class(TFPWebModule)
   TMyCustomWebModule = class(TCustomFPWebModule)
   private
-    FFiles: TUploadedFiles;
     FisJSON, FCreateSession: boolean;
     FOnBlockController: TOnBlockController;
     FOnMenu: TOnMenu;
@@ -87,6 +86,7 @@ type
     function GetCSRFFailedCount: integer;
     function GetCustomHeader(const KeyName: string): string;
     function GetEnvironment(const KeyName: string): string;
+    function GetFiles: TUploadedFiles;
     function GetHeader(const KeyName: string): string;
     function GetIsActive: boolean;
     function GetIsAjax: boolean;
@@ -163,7 +163,8 @@ type
     property TablePrefix: string read GetTablePrefix;
     property TimeUsage: integer read GetTimeUsage;
   published
-    property Files : TUploadedFiles Read FFiles;
+    // the files uploaded with the current request
+    property Files : TUploadedFiles Read GetFiles;
   end;
 
   TMyCustomController = class(TMyCustomWebModule);
@@ -300,6 +301,12 @@ type
 
 procedure InitializeFastPlaz(Sender: TObject = nil);
 
+// header values must not carry a line break: fpweb writes them as they are,
+// so a CR/LF from the request would start a new header or the body
+function SanitizeHeaderValue(const AValue: string): string;
+// "X-Requested-With" -> "HTTP_X_REQUESTED_WITH" (the CGI variable name)
+function HeaderToEnvName(const AHeaderName: string): string;
+
 procedure Debug(const Message: integer; const Key: string = '');
 procedure Debug(const Message: string; const Key: string = '');
 procedure Debug(const Sender: TObject; const Key: string = '');
@@ -332,6 +339,24 @@ type
 var
   MethodMap: TStringList;
   RouteRegexMap: TStringList;
+
+function SanitizeHeaderValue(const AValue: string): string;
+var
+  i: integer;
+begin
+  Result := '';
+  for i := 1 to Length(AValue) do
+    if not (AValue[i] in [#0, #10, #13]) then
+      Result := Result + AValue[i];
+  Result := Trim(Result);
+end;
+
+function HeaderToEnvName(const AHeaderName: string): string;
+begin
+  Result := UpperCase(StringReplace(Trim(AHeaderName), '-', '_', [rfReplaceAll]));
+  if (Result <> '') and (not Result.StartsWith('HTTP_')) then
+    Result := 'HTTP_' + Result;
+end;
 
 function _CleanVar(const Value: string): string;
 begin
@@ -514,7 +539,7 @@ begin
   Application.Response.Code := AStatusCode;
   if HttpStatusText(AStatusCode) <> '' then
     Application.Response.CodeText := HttpStatusText(AStatusCode);
-  Application.Response.Location := URL;
+  Application.Response.Location := SanitizeHeaderValue(URL);
   // send the (empty) response now so nothing written afterwards is appended,
   // then let fpcgi free Application itself; destroying it here caused a
   // double free in the unit finalization.
@@ -732,9 +757,18 @@ begin
   Result := Application.EnvironmentVariable[KeyName];
 end;
 
+function TMyCustomWebModule.GetFiles: TUploadedFiles;
+begin
+  Result := Request.Files;
+end;
+
+// accepts the CGI variable name ("HTTP_X_REQUESTED_WITH") as well as the
+// header name ("X-Requested-With")
 function TMyCustomWebModule.GetHeader(const KeyName: string): string;
 begin
   Result := GetEnvironmentVariable( KeyName);
+  if Result = '' then
+    Result := GetEnvironmentVariable( HeaderToEnvName( KeyName));
 end;
 
 function TMyCustomWebModule.GetIsActive: boolean;
@@ -869,7 +903,7 @@ end;
 procedure TMyCustomWebModule.SetCustomHeader(const KeyName: string;
   AValue: string);
 begin
-  Response.SetCustomHeader( KeyName, AValue);
+  Response.SetCustomHeader( KeyName, SanitizeHeaderValue( AValue));
 end;
 
 procedure TMyCustomWebModule.SetFlashMessage(AValue: string);
@@ -1594,6 +1628,13 @@ initialization
   XSSProof := False;
   //MemoryAllocated := GetHeapStatus.TotalAllocated;
   MemoryAllocated := SysGetHeapStatus.TotalAllocated;
+  // the request accessors first: TSessionController.Create derives the
+  // session id from _SERVER['REMOTE_ADDR']
+  _REQUEST := TREQUESTVAR.Create;
+  _POST := TPOST.Create;
+  _GET := TGET.Create;
+  _SESSION := TSESSION.Create;
+  _SERVER := TSERVER.Create;
   SessionController := TSessionController.Create();
   FastPlasAppandler := TFastPlasAppandler.Create(nil);
   ModuleLoaded := TModuleLoaded.Create(TModuleLoadedItem);
@@ -1601,11 +1642,6 @@ initialization
   ModUtil := TModUtil.Create;
   DisplayErrorHandler := @DoDisplayError;
   RedirectHandler := @DoRedirect;
-  _REQUEST := TREQUESTVAR.Create;
-  _POST := TPOST.Create;
-  _GET := TGET.Create;
-  _SESSION := TSESSION.Create;
-  _SERVER := TSERVER.Create;
   MethodMap := TStringList.Create;
   RouteRegexMap := TStringList.Create;
 
