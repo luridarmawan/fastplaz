@@ -22,8 +22,8 @@ type
   { THTMLUtil }
 
   THTMLUtil = class
-    FFormID: string;
   private
+    FFormID: string;
     function GetFormID: string;
     function setTag(const Tag: string; const Content: string;
       const Options: array of string; EndTag: boolean = True): string;
@@ -75,6 +75,9 @@ function li(Content: string; StyleClass: string = ''): string;
 function Span(Content: string; StyleClass: string = ''): string;
 function Block(Content: string; StyleClass: string = ''; BlockID: string = ''): string;
 
+// Escape &, <, >, " and ' so a value can be placed in HTML text or in a
+// double or single quoted attribute.
+function HTMLEncode(const S: string): string;
 function StripTags(const Content: string): string;
 function StripTagsCustom(const Content: string; const TagStart: string;
   const TagEnd: string): string;
@@ -141,37 +144,96 @@ begin
     Result := '<div ' + s + ' class="' + StyleClass + '">' + Content + '</div>';
 end;
 
-function StripTags(const Content: string): string;
+function HTMLEncode(const S: string): string;
 var
-  s: string;
+  i: integer;
 begin
-  s := Content;
-  while ((Pos('<', s) > 0) or (Pos('>', s) > 0)) do
-    s := StringReplace(s, copy(s, pos('<', s), pos('>', s) - pos('<', s) + 1),
-      '', [rfIgnoreCase, rfReplaceAll]);
-  Result := s;
+  Result := '';
+  for i := 1 to Length(S) do
+    case S[i] of
+      '&': Result := Result + '&amp;';
+      '<': Result := Result + '&lt;';
+      '>': Result := Result + '&gt;';
+      '"': Result := Result + '&quot;';
+      '''': Result := Result + '&#39;';
+      else
+        Result := Result + S[i];
+    end;
 end;
 
+// Remove every TagStart ... TagEnd span, scanning left to right. A TagStart
+// without a matching TagEnd after it is kept as text; a TagEnd without a
+// TagStart before it is kept as well. The old implementation looked for the
+// first TagEnd anywhere in the string and looped forever on "a > b <i>x</i>".
 function StripTagsCustom(const Content: string; const TagStart: string;
   const TagEnd: string): string;
 var
-  s: string;
+  p, q, start: integer;
 begin
-  s := Content;
-  while ((Pos(TagStart, s) > 0) or (Pos(TagEnd, s) > 0)) do
-    s := StringReplace(s, copy(s, pos(TagStart, s), pos(TagEnd, s) -
-      pos(TagStart, s) + 1), '', [rfIgnoreCase, rfReplaceAll]);
-  Result := s;
+  Result := '';
+  if (TagStart = '') or (TagEnd = '') then
+    Exit(Content);
+  start := 1;
+  repeat
+    p := PosEx(TagStart, Content, start);
+    if p = 0 then
+      Break;
+    q := PosEx(TagEnd, Content, p + Length(TagStart));
+    if q = 0 then
+      Break;
+    Result := Result + Copy(Content, start, p - start);
+    start := q + Length(TagEnd);
+  until False;
+  Result := Result + Copy(Content, start, MaxInt);
 end;
 
+// HTML variant: a '<' only opens a tag when a tag name, '/', '!' or '?'
+// follows, so "1 < 2" survives.
+function StripTags(const Content: string): string;
+var
+  p, q, start: integer;
+begin
+  Result := '';
+  start := 1;
+  p := 1;
+  while p <= Length(Content) do
+  begin
+    if (Content[p] = '<') and (p < Length(Content)) and
+      (Content[p + 1] in ['a'..'z', 'A'..'Z', '/', '!', '?']) then
+    begin
+      q := PosEx('>', Content, p + 1);
+      if q = 0 then
+        Break;
+      Result := Result + Copy(Content, start, p - start);
+      start := q + 1;
+      p := start;
+    end
+    else
+      Inc(p);
+  end;
+  Result := Result + Copy(Content, start, MaxInt);
+end;
+
+// Shorten Content to about CharacterCount characters, cutting at a word
+// boundary, and append Suffix when something was cut off.
 function MoreLess(const Content: string; CharacterCount: integer;
   Suffix: string): string;
+var
+  p: integer;
 begin
-  if CharacterCount = 0 then
+  if CharacterCount <= 0 then
     CharacterCount := 100;
-  Result := StripTags(Content);
-  Result := Copy(Result, 1, CharacterCount);
-  Result := Copy(Result, 1, RPos(' ', Result) - 1);
+  Result := Trim(StripTags(Content));
+  if Length(Result) <= CharacterCount then
+    Exit;
+  // cut at the last word boundary unless the cut already lands on one
+  if Result[CharacterCount + 1] <> ' ' then
+  begin
+    p := RPos(' ', Copy(Result, 1, CharacterCount));
+    if p > 1 then
+      CharacterCount := p - 1;
+  end;
+  Result := TrimRight(Copy(Result, 1, CharacterCount));
   if Suffix <> '' then
     Result := Result + ' ' + Suffix;
 end;
@@ -309,8 +371,7 @@ end;
 
 function THTMLUtil.img(const ImageUrl: string): string;
 begin
-  Result := setTag('img', '', ['src="' + ImageUrl + '"'], False);
-
+  Result := setTag('img', '', ['src="' + HTMLEncode(ImageUrl) + '"'], False);
 end;
 
 function THTMLUtil.AddForm(Options: array of string): string;
@@ -337,11 +398,19 @@ begin
     Result := Result + '<span class="form-mandatory-flag">*</span>';
 end;
 
+// Every caller supplied value is HTML-escaped: Value is typically what the
+// user just submitted, so without escaping it could close the attribute and
+// inject markup (reflected XSS).
 function THTMLUtil.AddInputLTE(InputID, InputType: string; LabelName: string;
   Value: string; Placeholder: string; Required: boolean; ButtonLabel: string): string;
 var
   btnName: string;
 begin
+  InputID := HTMLEncode(InputID);
+  InputType := HTMLEncode(InputType);
+  LabelName := HTMLEncode(LabelName);
+  Value := HTMLEncode(Value);
+  Placeholder := HTMLEncode(Placeholder);
   Result := '<div class="form-group">';
   if InputType = 'hidden' then
   begin
@@ -379,11 +448,11 @@ begin
     //-- button
     if ButtonLabel <> '' then
     begin
-      btnName := 'btn-' + ButtonLabel;
-      btnName := StringReplace(btnName, ' ', '', [rfReplaceAll]);
+      btnName := 'btn-' + StringReplace(ButtonLabel, ' ', '', [rfReplaceAll]);
+      btnName := HTMLEncode(btnName);
       Result := Result + '<span class="input-group-btn"><button id="' +
         btnName + '" name="' + btnName + '" type="button" class="btn btn-info btn-flat">' +
-        ButtonLabel + '</span></span>';
+        HTMLEncode(ButtonLabel) + '</button></span>';
     end;
 
     Result := Result + '</div>';
@@ -401,26 +470,31 @@ begin
   if Data = nil then
     Exit;
 
+  InputID := HTMLEncode(InputID);
   html := TStringList.Create;
-  Data.First;
-  html.Add('<DIV class="form-group">');
-  html.Add('<LABEL FOR="' + InputID + '" class="col-sm-2 control-label">' +
-    LabelName + '</LABEL>');
-  html.Add('<DIV CLASS="col-sm-9 ">');
-  html.Add('<SELECT id="' + InputID + '" name="' + InputID + '" class="form-control">');
-  html.Add('<OPTION value="0">- NONE -</OPTION>');
-  repeat
-    index := Data[IndexFieldName];
-    Value := Data[ValueFieldName];
-    html.Add('<OPTION value="' + index + '">' + Value + '</OPTION>');
-    Data.Next;
-  until Data.EOF;
-  html.Add('</SELECT>');
-  html.Add('</DIV>');
-  html.Add('</DIV>');
-
-  Result := html.Text;
-  FreeAndNil(html);
+  try
+    Data.First;
+    html.Add('<DIV class="form-group">');
+    html.Add('<LABEL FOR="' + InputID + '" class="col-sm-2 control-label">' +
+      HTMLEncode(LabelName) + '</LABEL>');
+    html.Add('<DIV CLASS="col-sm-9 ">');
+    html.Add('<SELECT id="' + InputID + '" name="' + InputID + '" class="form-control">');
+    html.Add('<OPTION value="0">- NONE -</OPTION>');
+    // "repeat ... until EOF" ran the body once on an empty dataset
+    while not Data.EOF do
+    begin
+      index := Data.FieldByName(IndexFieldName).AsString;
+      Value := Data.FieldByName(ValueFieldName).AsString;
+      html.Add('<OPTION value="' + HTMLEncode(index) + '">' + HTMLEncode(Value) + '</OPTION>');
+      Data.Next;
+    end;
+    html.Add('</SELECT>');
+    html.Add('</DIV>');
+    html.Add('</DIV>');
+    Result := html.Text;
+  finally
+    html.Free;
+  end;
 end;
 
 function THTMLUtil.AddField(TagName: string; Options: array of string): string;
@@ -448,14 +522,14 @@ begin
   begin
     s := s + ' ' + Options[i];
   end;
-  Result := '<a href="' + URL + '"' + s + '>' + Text + '</a>';
+  Result := '<a href="' + HTMLEncode(URL) + '"' + s + '>' + HTMLEncode(Text) + '</a>';
 end;
 
 function THTMLUtil.ReCaptcha(const PublicKey: string; const Version: string): string;
 begin
   if Version = 'v2' then
   begin
-    Result := #13'<div class="g-recaptcha" data-sitekey="' + PublicKey +
+    Result := #13'<div class="g-recaptcha" data-sitekey="' + HTMLEncode(PublicKey) +
       '"></div>' + #13'<script src="https://www.google.com/recaptcha/api.js?hl=en"></script>';
   end
   else
@@ -473,8 +547,8 @@ begin
       //    + #13'</script>'
 
       + #13'<input type="hidden" name="recaptcha_version" value="' +
-      Version + '"/>' + #13'<script type="text/javascript" src="http://www.google.com/recaptcha/api/challenge?hl=en&k='
-      + PublicKey + '">' + #13'</script>';
+      HTMLEncode(Version) + '"/>' + #13'<script type="text/javascript" src="https://www.google.com/recaptcha/api/challenge?hl=en&amp;k='
+      + HTMLEncode(PublicKey) + '">' + #13'</script>';
   end;
 end;
 
