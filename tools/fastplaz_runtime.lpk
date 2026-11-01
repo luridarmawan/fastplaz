@@ -8,7 +8,7 @@
       <Version Value="11"/>
       <SearchPaths>
         <IncludeFiles Value="../FastPlaz"/>
-        <OtherUnitFiles Value="src;../FastPlaz/src/systems;../FastPlaz/src/library;../FastPlaz/src/vendor;../FastPlaz/src/app/about;../FastPlaz/src/model;../FastPlaz/src/util;../FastPlaz/src/helper"/>
+        <OtherUnitFiles Value="runtime;../FastPlaz/src/systems;../FastPlaz/src/library;../FastPlaz/src/vendor;../FastPlaz/src/app/about;../FastPlaz/src/model;../FastPlaz/src/util;../FastPlaz/src/helper"/>
         <UnitOutputDirectory Value="lib/runtime/$(TargetCPU)-$(TargetOS)"/>
       </SearchPaths>
       <Other>
@@ -203,7 +203,7 @@
         <UnitName Value="modvar_util"/>
       </Item44>
       <Item45>
-        <Filename Value="src/fastplaz_runtime_register.pas"/>
+        <Filename Value="runtime/fastplaz_runtime_register.pas"/>
         <HasRegisterProc Value="True"/>
         <UnitName Value="fastplaz_runtime_register"/>
       </Item45>
