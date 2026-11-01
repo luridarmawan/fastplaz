@@ -3,13 +3,13 @@ program regex_tester_test;
 {$mode objfpc}{$H+}
 
 uses
-  Classes, consoletestrunner, test_regex_tester_lib;
+  Classes, consoletestrunner, fastplaz_testrunner, test_regex_tester_lib;
 
 type
 
   { TMyTestRunner }
 
-  TMyTestRunner = class(TTestRunner)
+  TMyTestRunner = class(TFastPlazTestRunner)
   protected
   end;
 

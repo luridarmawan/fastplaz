@@ -255,3 +255,6 @@ backup.sh
 #LAST_UPDATED_DEVELOPMENT
 #LAST_UPDATED
 
+
+# local environment (SMTP credentials etc.)
+.env

@@ -19,9 +19,20 @@ type
   generic TStringHashMap<T> = class(specialize TFPGMap<String,T>) end;
   TFieldValueMap = specialize TStringHashMap<variant>;
 
+  { TFPSQLConnector }
+
   TFPSQLConnector = class(TSQLConnector)
+  private
+    FSkipLibraryVersionCheck: boolean;
+    procedure ApplySkipLibraryVersionCheck;
+    procedure SetSkipLibraryVersionCheck(AValue: boolean);
+  protected
+    procedure CreateProxy; override;
   public
     property Proxy;
+    // MySQL only: skip the client library version check. The proxy connection
+    // is created on Open, so the flag is stored here and applied at that time.
+    property SkipLibraryVersionCheck: boolean read FSkipLibraryVersionCheck write SetSkipLibraryVersionCheck;
   end;
 
   { TSimpleModel }
@@ -46,6 +57,7 @@ type
     FScriptLimit,
     FScriptOrderBy : string;
     FUseSoftDelete: boolean;
+    FSoftDeleteField: string;
 
     primaryKeyValue : string;
     FGenFields : TStringList;
@@ -89,7 +101,10 @@ type
     property EOF: boolean read GetEOF;
     property LastInsertID: LongInt read GetLastInsertID;
     property Message: string read AMessage;
+    // With UseSoftDelete, Delete marks rows through SoftDeleteField
+    // (default is_deleted) and Find/All/GetAll skip marked rows.
     property UseSoftDelete: boolean read FUseSoftDelete write FUseSoftDelete;
+    property SoftDeleteField: string read FSoftDeleteField write FSoftDeleteField;
 
     function ParamByName(Const AParamName : String) : TParam;
     property SQL : TStringlist read getSQL;
@@ -175,6 +190,28 @@ var
   DB_Transaction_Write : TSQLTransaction;
   DB_LibLoader_Write : TSQLDBLibraryLoader;
 
+{ TFPSQLConnector }
+
+procedure TFPSQLConnector.ApplySkipLibraryVersionCheck;
+begin
+  // SkipLibraryVersionCheck is a published property of every TMySQLxxConnection,
+  // so RTTI covers all MySQL versions without naming each class.
+  if Assigned(Proxy) and IsPublishedProp(Proxy, 'SkipLibraryVersionCheck') then
+    SetOrdProp(Proxy, 'SkipLibraryVersionCheck', Ord(FSkipLibraryVersionCheck));
+end;
+
+procedure TFPSQLConnector.SetSkipLibraryVersionCheck(AValue: boolean);
+begin
+  FSkipLibraryVersionCheck := AValue;
+  ApplySkipLibraryVersionCheck;
+end;
+
+procedure TFPSQLConnector.CreateProxy;
+begin
+  inherited CreateProxy;
+  ApplySkipLibraryVersionCheck;
+end;
+
 function DataBaseInit(const RedirecURL: string; const DBConfigName: string
   ): boolean;
 var
@@ -183,40 +220,35 @@ begin
   Result := False;
   AppData.useDatabase := True;
 
+  // already connected: keep the active configuration untouched
   if DB_Connector.Connected then
   begin
     Result := True;
+    Exit;
   end;
 
   // multidb - prepare
   AppData.databaseRead := string( Config.GetValue( _DATABASE_OPTIONS_READ, 'default'));
   AppData.databaseWrite := string( Config.GetValue( UnicodeString( _DATABASE_OPTIONS_WRITE), UnicodeString( AppData.databaseRead)));
-  AppData.tablePrefix := string( Config.GetValue( UnicodeString( format( _DATABASE_TABLE_PREFIX, [AppData.databaseRead])), UnicodeString('')));
-  AppData.databaseVersionCheck := Config.GetValue( UnicodeString( format( _DATABASE_VERSION_CHECK, [AppData.databaseRead])), True);
-
   if not DBConfigName.IsEmpty then
   begin
     AppData.databaseRead := DBConfigName;
     AppData.databaseWrite := DBConfigName;
   end;
+  // table prefix and version check belong to the selected configuration
+  AppData.tablePrefix := string( Config.GetValue( UnicodeString( format( _DATABASE_TABLE_PREFIX, [AppData.databaseRead])), UnicodeString('')));
+  AppData.databaseVersionCheck := Config.GetValue( UnicodeString( format( _DATABASE_VERSION_CHECK, [AppData.databaseRead])), True);
 
-  // currentdirectory mesti dipindah
-  //s := GetCurrentDir + DirectorySeparator + string( Config.GetValue( format( _DATABASE_LIBRARY, [AppData.databaseRead]), ''));
+  // client library (optional): an empty value uses the system library
   s := string( Config.GetValue( UnicodeString( format( _DATABASE_LIBRARY, [AppData.databaseRead])), UnicodeString('')));
-
-  if not SetCurrentDir( ExtractFilePath( s)) then
+  if s <> '' then
   begin
-    DisplayError( Format(_ERR_DATABASE_LIBRARY_NOT_EXIST, [ AppData.databaseRead, s]));
-  end;
-  s := GetCurrentDir + DirectorySeparator + ExtractFileName( string( Config.GetValue( UnicodeString( format( _DATABASE_LIBRARY, [AppData.databaseRead])), UnicodeString(''))));
-  if not FileExists( s) then
-  begin
-    //ulil
-    //SetCurrentDir(ExtractFilePath(Application.ExeName));
-    //DisplayError( Format(_ERR_DATABASE_LIBRARY_NOT_EXIST, [ AppData.databaseRead, s]));
-  end;
-
-  if Config.GetValue( UnicodeString( format( _DATABASE_LIBRARY, [AppData.databaseRead])), UnicodeString('')) <> '' then begin
+    // resolve the library path (relative to the current directory or absolute)
+    if not SetCurrentDir( ExtractFilePath( s)) then
+    begin
+      DisplayError( Format(_ERR_DATABASE_LIBRARY_NOT_EXIST, [ AppData.databaseRead, s]));
+    end;
+    s := GetCurrentDir + DirectorySeparator + ExtractFileName( s);
     try
       DB_LibLoader.ConnectionType:= string( Config.GetValue( UnicodeString( format( _DATABASE_DRIVER, [AppData.databaseRead])), UnicodeString('')));
       DB_LibLoader.LibraryName:= s;
@@ -252,28 +284,11 @@ begin
     if s <> '' then
       DB_Connector.CharSet := s;
 
-    // Skip Library Version Check from MySQL
-    if not AppData.databaseVersionCheck then
-    begin
-      if DB_Connector.ConnectorType.ToLower.StartsWith('mysql') then
-      begin
-        if TFPSQLConnector(DB_Connector).Proxy is TConnectionName then
-        begin
-          TConnectionName(TFPSQLConnector(DB_Connector).Proxy).SkipLibraryVersionCheck:= True;
-        end
-        else
-        begin
-          // specific by mysql version
-          if TFPSQLConnector(DB_Connector).Proxy is TMySQL80Connection then
-            TMySQL80Connection(TFPSQLConnector(DB_Connector).Proxy).SkipLibraryVersionCheck:= True
-          else if TFPSQLConnector(DB_Connector).Proxy is TMySQL57Connection then
-            TMySQL57Connection(TFPSQLConnector(DB_Connector).Proxy).SkipLibraryVersionCheck:= True;
-
-          // prepare for another mysql version
-
-        end;
-      end;
-    end;
+    // Skip Library Version Check from MySQL.
+    // The proxy connection does not exist before Open, so the flag is kept on
+    // the connector and applied when the proxy is created.
+    if DB_Connector is TFPSQLConnector then
+      TFPSQLConnector(DB_Connector).SkipLibraryVersionCheck := not AppData.databaseVersionCheck;
 
     try
       DB_Connector.Open;
@@ -291,7 +306,6 @@ begin
       end;
     end;
   end;//-- if not DB_Connector.Connected then
-
 
 end;
 
@@ -340,7 +354,7 @@ begin
       q.SQL.Text := q.SQL.Text + ' ORDER BY ' + Order;
     if Limit > 0 then
       q.SQL.Text := q.SQL.Text + ' LIMIT ' + IntToStr(Limit);
-    if Offset >= 0 then
+    if Offset > 0 then
       q.SQL.Text := q.SQL.Text + ' OFFSET ' + IntToStr(Offset);
     q.Prepare;
 
@@ -442,20 +456,22 @@ begin
     Exit;
   end;
 
-  s := GetCurrentDir + DirectorySeparator + string( Config.GetValue( UnicodeString( format( _DATABASE_LIBRARY, [ConnectionName])), UnicodeString('')));
-  if not SetCurrentDir( ExtractFilePath( s)) then
+  // client library (optional): resolved like DataBaseInit does, so a relative
+  // as well as an absolute path is accepted
+  s := string( Config.GetValue( UnicodeString( format( _DATABASE_LIBRARY, [ConnectionName])), UnicodeString('')));
+  if s <> '' then
   begin
-    DisplayError( Format(_ERR_DATABASE_LIBRARY_NOT_EXIST, [ ConnectionName, s]));
-  end;
-  s := GetCurrentDir + DirectorySeparator + ExtractFileName( string( Config.GetValue( UnicodeString( format( _DATABASE_LIBRARY, [ ConnectionName])), UnicodeString(''))));
-  if not FileExists( s) then
-  begin
-    SetCurrentDir(ExtractFilePath(Application.ExeName));
-    DisplayError( Format(_ERR_DATABASE_LIBRARY_NOT_EXIST, [ ConnectionName, s]));
-  end;
+    if not SetCurrentDir( ExtractFilePath( s)) then
+    begin
+      DisplayError( Format(_ERR_DATABASE_LIBRARY_NOT_EXIST, [ ConnectionName, s]));
+    end;
+    s := GetCurrentDir + DirectorySeparator + ExtractFileName( s);
+    if not FileExists( s) then
+    begin
+      SetCurrentDir(ExtractFilePath(Application.ExeName));
+      DisplayError( Format(_ERR_DATABASE_LIBRARY_NOT_EXIST, [ ConnectionName, s]));
+    end;
 
-  if Config.GetValue( UnicodeString( format( _DATABASE_LIBRARY, [ ConnectionName])), UnicodeString('')) <> '' then
-  begin
     if not Assigned( DB_LibLoader_Write) then DB_LibLoader_Write := TSQLDBLibraryLoader.Create( nil);
     try
       DB_LibLoader_Write.ConnectionType:= string( Config.GetValue( UnicodeString( format( _DATABASE_DRIVER, [ConnectionName])), UnicodeString('')));
@@ -467,13 +483,13 @@ begin
           DisplayError( 'Database Init ('+ConnectionName+'): Load Library, '+E.Message)
       end;
     end;
+    // back to app directory
+    SetCurrentDir(ExtractFilePath(Application.ExeName));
   end;
-  // back to app directory
-  SetCurrentDir(ExtractFilePath(Application.ExeName));
 
   if not Assigned( DB_Connector_Write) then begin
     DB_Transaction_Write := TSQLTransaction.Create( nil);
-    DB_Connector_Write := TSQLConnector.Create( nil);
+    DB_Connector_Write := TFPSQLConnector.Create( nil);
     DB_Connector_Write.Transaction := DB_Transaction_Write;
   end;
   DB_Connector_Write.HostName:= string( Config.GetValue( UnicodeString( format( _DATABASE_HOSTNAME, [ConnectionName])), UnicodeString('localhost')));
@@ -483,7 +499,10 @@ begin
   DB_Connector_Write.DatabaseName:= string( Config.GetValue( UnicodeString( format( _DATABASE_DATABASENAME, [ConnectionName])), UnicodeString('test')));
   s := string( Config.GetValue( UnicodeString( format( _DATABASE_CHARSET, [ConnectionName])), UnicodeString('')));
   if s <> '' then
-    DB_Connector.CharSet := s;
+    DB_Connector_Write.CharSet := s;
+  if DB_Connector_Write is TFPSQLConnector then
+    TFPSQLConnector(DB_Connector_Write).SkipLibraryVersionCheck :=
+      not Config.GetValue( UnicodeString( format( _DATABASE_VERSION_CHECK, [ConnectionName])), True);
 
   if Config.GetValue( UnicodeString( format( _DATABASE_PORT, [ConnectionName])), UnicodeString('')) <> '' then
     DB_Connector_Write.Params.Values['port'] := string( Config.GetValue( UTF8Decode(format( _DATABASE_PORT, [ConnectionName])), UnicodeString('')));
@@ -581,21 +600,26 @@ function DataToJSON(Data: TSQLQuery; var ResultJSON: TJSONArray;
 var
   item : TJSONObject;
   item_array : TJSONArray;
-  field_name, fieldType : string;
+  field_name : string;
   i,j:integer;
 begin
   Result:=False;
   i:=1;
+  item := nil;
+  item_array := nil;
   try
     Data.First;
     while not Data.EOF do
     begin
-      item := TJSONObject.Create();
-      item_array := TJSONArray.Create;
+      // create only the container that is added to the result,
+      // the other one would never be freed
+      if NoFieldName then
+        item_array := TJSONArray.Create
+      else
+        item := TJSONObject.Create();
       for j:=0 to Data.FieldCount-1 do
       begin
         field_name:= Data.FieldDefs.Items[j].Name;
-        fieldType := GetEnumName(TypeInfo(TFieldType), Ord(Data.FieldDefs.Items[j].DataType));
         if NoFieldName then
         begin
           if Data.FieldDefs.Items[j].DataType = ftDateTime then
@@ -743,14 +767,20 @@ begin
 end;
 
 function TSimpleModel.GetLastInsertID: LongInt;
+var
+  s : string;
 begin
   Result := 0;
   try
     if Data.Active then Data.Close;
-    if DB_Connector.ConnectorType.ToLower.StartsWith('postgre') then
+    s := LowerCase( TSQLConnector( Data.DataBase).ConnectorType);
+    if Pos('postgre', s) > 0 then
       Data.SQL.Text := 'SELECT lastval() AS lastid'
+    else if Pos('sqlite', s) > 0 then
+      Data.SQL.Text := 'SELECT last_insert_rowid() AS lastid'
     else
-      Data.SQL.Text := 'SELECT LAST_INSERT_ID() as lastid FROM ' + TableName;
+      // no FROM clause: with a table name it returns one row per table row
+      Data.SQL.Text := 'SELECT LAST_INSERT_ID() AS lastid';
     Data.Open;
     if Data.RecordCount > 0 then
       Result := Data.FieldValues['lastid'];
@@ -766,8 +796,7 @@ begin
   FRecordCountFromArray := 0;
   try
     if Data.Active then Data.Close;
-    if not AUniDirectional then
-      Data.UniDirectional := AUniDirectional;
+    Data.UniDirectional := AUniDirectional;
     Data.Open;
     if not AUniDirectional then
     begin
@@ -868,6 +897,11 @@ begin
     if (Pos('mysql', s) > 0) then Result := getFieldList_mysql;
     if (Pos('sqlite3', s) > 0) then Result := getFieldList_sqlite;
     if (Pos('postgre', s) > 0) then Result := getFieldList_postgresql;
+    // unknown driver or no column found: select everything instead of
+    // generating "SELECT  FROM table"
+    if FSelectField = '' then
+      FSelectField := FTableName + '.*';
+    Result := FFieldList;
   end;
 end;
 
@@ -887,15 +921,21 @@ begin
 end;
 
 procedure TSimpleModel.SetFieldValue(FieldName: String; AValue: Variant);
+var
+  i : integer;
 begin
   if not Assigned( FGenFields) then
   begin
     FGenFields := TStringList.Create;
-    FGenFields := TStringList.Create;
     FieldValueMap := TFieldValueMap.Create;
   end;
+  // assigning the same field twice must not produce a duplicate column in Save
+  i := FGenFields.IndexOf( FieldName);
+  if i = -1 then
+    FGenFields.Add( FieldName)
+  else
+    FieldName := FGenFields[i];
   FieldValueMap[FieldName] := AValue;
-  FGenFields.Add( FieldName);
 end;
 
 constructor TSimpleModel.Create(const DefaultTableName: string; const pPrimaryKey: string);
@@ -955,6 +995,7 @@ begin
   FGenFields := nil;
   FieldValueMap := nil;
   FUseSoftDelete := False;
+  FSoftDeleteField := 'is_deleted';
   Data := TSQLQuery.Create(nil);
   Data.UniDirectional:=True;
   Data.DataBase := DB_Connector;
@@ -997,8 +1038,12 @@ function TSimpleModel.GetAll(Limit: Integer; Offset: Integer;
 begin
   _queryPrepare;
   Data.SQL.Text := 'SELECT ' + FSelectField + ' FROM ' + FTableName;
+  if FUseSoftDelete and (Trim(FSoftDeleteField) <> '') then
+    Data.SQL.Add('WHERE ' + FTableName + '.' + FSoftDeleteField + '=0');
   if Limit > 0 then
     Data.SQL.Add('LIMIT ' + i2s(Limit));
+  if Offset > 0 then
+    Data.SQL.Add('OFFSET ' + i2s(Offset));
   _queryOpen(AUniDirectional);
   Result := true;
 end;
@@ -1089,13 +1134,13 @@ var
   _joinfield,
   _join : TStrings;
 begin
+  Result := false;
   if not DB_Connector.Connected then begin
     DisplayError(_ERR_DATABASE_NOT_INITIALIZED);
     Exit;
   end;
 
   primaryKeyValue := '';
-  Result := false;
   sWhere := '';
   if high(Where)>=0 then
   begin
@@ -1111,9 +1156,21 @@ begin
     end;
     sWhere := sWhere.Replace(' AND OR ', ' OR ');
   end;
+  // soft deleted rows are not part of the result
+  if FUseSoftDelete and (Trim(FSoftDeleteField) <> '') then
+  begin
+    if sWhere = '' then
+      sWhere := FAliasName + '.' + FSoftDeleteField + '=0'
+    else
+      sWhere := '(' + sWhere + ') AND ' + FAliasName + '.' + FSoftDeleteField + '=0';
+  end;
   if CustomField = '' then begin
     _queryPrepare;
     _selectField := FSelectField;
+    // the FROM clause aliases the table, so the generated field list has to
+    // use the alias too (AliasName set, or a schema-qualified table "db.users")
+    if FAliasName <> FTableName then
+      _selectField := _selectField.Replace( FTableName + '.', FAliasName + '.');
   end else begin
     _selectField:= CustomField;
   end;
@@ -1260,6 +1317,7 @@ procedure TSimpleModel.Close;
 begin
   if Data.Active then Data.Close;
   if Assigned( FJoinList) then FJoinList.Clear;
+  FGroupField := '';
 end;
 
 function TSimpleModel.Save(Where: string; AutoCommit: boolean): boolean;
@@ -1269,6 +1327,19 @@ var
   s : string;
 begin
   Result := false;
+  AMessage := '';
+
+  if not DB_Connector.Connected then begin
+    DisplayError(_ERR_DATABASE_NOT_INITIALIZED);
+    Exit;
+  end;
+
+  // nothing was assigned through Value[] / SetFieldValue
+  if (not Assigned( FGenFields)) or (FGenFields.Count = 0) then
+  begin
+    AMessage := 'no field value to save';
+    Exit;
+  end;
 
   if AppData.databaseRead = AppData.databaseWrite then
   begin
@@ -1283,12 +1354,9 @@ begin
     if Data.DataBase = nil then
     begin
       DisplayError( format( _ERR_DATABASE_CANNOT_CONNECT, [ AppData.databaseWrite]));
+      Data.DataBase := DB_Connector;
+      Exit;
     end;
-  end;
-
-  if not DB_Connector.Connected then begin
-    DisplayError(_ERR_DATABASE_NOT_INITIALIZED);
-    Exit;
   end;
 
   sSQL := TStringList.Create;
@@ -1301,20 +1369,12 @@ begin
       if i <> FGenFields.Count-1 then s:= s + ',' ;
       sSQL.Add( s);
     end;
-
-    if Where <> '' then
-    begin
-      sSQL.Add( 'WHERE ' + Where);
-      primaryKeyValue:='';
-    end
-    else
-      sSQL.Add( 'WHERE ' + primaryKey + '=''' + primaryKeyValue + '''');
-
+    sSQL.Add( 'WHERE ' + Where);
+    primaryKeyValue:='';
   end
   else
   begin //-- new data
     sSQL.Add( 'INSERT INTO '+TableName+' (');
-    s := Implode( FGenFields, ',');
     s := '';
     for i:= 0 to FGenFields.Count-1 do
     begin
@@ -1331,13 +1391,14 @@ begin
 
   try
     Data.SQL.Text:= sSQL.Text;
-    for i:=0 to FieldValueMap.Count-1 do
+    for i:=0 to FGenFields.Count-1 do
     begin
-      s := FieldValueMap.Keys[i];
-      Data.Params.ParamByName( FGenFields[i]).Value := FieldValueMap[s];
+      s := FGenFields[i];
+      Data.Params.ParamByName( s).Value := FieldValueMap[s];
     end;
     Data.ExecSQL;
-    if AutoCommit then Commit;
+    // commit on the connection that ran the statement (read/write split)
+    if AutoCommit then TSQLConnector( Data.DataBase).Transaction.Commit;
     Result := True;
   except
     on E: Exception do begin
@@ -1366,7 +1427,15 @@ begin
   begin
     if RecordCount <> 1 then exit;
   end;
+  // no WHERE and no record found before: never run "DELETE ... WHERE id="
+  if (Where = '') and ((primaryKey = '') or (primaryKeyValue = '')) then
+    Exit;
   if Data.Active then Data.Close;
+
+  if not DB_Connector.Connected then begin
+    DisplayError(_ERR_DATABASE_NOT_INITIALIZED);
+    Exit;
+  end;
 
   if AppData.databaseRead = AppData.databaseWrite then
   begin
@@ -1378,18 +1447,15 @@ begin
     if Data.DataBase = nil then
     begin
       DisplayError( format( _ERR_DATABASE_CANNOT_CONNECT, [ AppData.databaseWrite]));
+      Data.DataBase := DB_Connector;
+      Exit;
     end;
-  end;
-
-  if not DB_Connector.Connected then begin
-    DisplayError(_ERR_DATABASE_NOT_INITIALIZED);
-    Exit;
   end;
 
   s := 'DELETE FROM ' + TableName + ' WHERE ';
   if Where = '' then
   begin
-    s:= s + primaryKey + '=' + primaryKeyValue;
+    s:= s + primaryKey + '=' + QuotedStr( primaryKeyValue);
   end
   else
   begin
@@ -1398,7 +1464,8 @@ begin
   try
     Data.SQL.Text:= s;
     Data.ExecSQL;
-    if AutoCommit then Commit;
+    // commit on the connection that ran the statement (read/write split)
+    if AutoCommit then TSQLConnector( Data.DataBase).Transaction.Commit;
     Result := True;
   except
     on E: Exception do begin
@@ -1426,9 +1493,56 @@ begin
   Result := Delete( primaryKey+'='+i2s(ID));
 end;
 
+// Marks rows as deleted instead of removing them. This used to be a stub
+// that returned False, so Delete with UseSoftDelete did nothing.
 function TSimpleModel.SoftDelete(Where: string; AutoCommit: boolean): boolean;
+var
+  s: string;
 begin
   Result := False;
+  if Trim(FSoftDeleteField) = '' then
+    Exit;
+  if ((Where='') and (Data.Active)) then
+  begin
+    if RecordCount <> 1 then exit;
+  end;
+  if (Where = '') and ((primaryKey = '') or (primaryKeyValue = '')) then
+    Exit;
+  if Data.Active then Data.Close;
+  if not DB_Connector.Connected then begin
+    DisplayError(_ERR_DATABASE_NOT_INITIALIZED);
+    Exit;
+  end;
+  if AppData.databaseRead <> AppData.databaseWrite then
+  begin
+    Data.DataBase := DatabaseSecond_Prepare( AppData.databaseWrite, 'write');
+    if Data.DataBase = nil then
+    begin
+      DisplayError( format( _ERR_DATABASE_CANNOT_CONNECT, [ AppData.databaseWrite]));
+      Data.DataBase := DB_Connector;
+      Exit;
+    end;
+  end;
+  s := 'UPDATE ' + TableName + ' SET ' + FFieldQuote + FSoftDeleteField + FFieldQuote + '=1 WHERE ';
+  if Where = '' then
+    s := s + primaryKey + '=' + QuotedStr( primaryKeyValue)
+  else
+    s := s + Where;
+  try
+    Data.SQL.Text := s;
+    Data.ExecSQL;
+    if AutoCommit then TSQLConnector( Data.DataBase).Transaction.Commit;
+    Result := True;
+  except
+    on E: Exception do begin
+      AMessage := E.Message;
+      if AppData.debug then begin
+        LogUtil.add( E.Message);
+        LogUtil.add( Data.SQL.Text);
+      end;
+    end;
+  end;
+  Data.DataBase := DB_Connector;
 end;
 
 function TSimpleModel.SoftDelete(ID: LongInt): boolean;
@@ -1442,8 +1556,9 @@ end;
 function TSimpleModel.Update(AutoCommit: boolean): boolean;
 begin
   Result := False;
-  if primaryKey.IsEmpty then Exit;
-  Result :=  Save(primaryKey+'='+primaryKeyValue, AutoCommit);
+  // no record was found before: an empty value would give "WHERE id="
+  if primaryKey.IsEmpty or primaryKeyValue.IsEmpty then Exit;
+  Result :=  Save(primaryKey+'='+QuotedStr( primaryKeyValue), AutoCommit);
 end;
 
 procedure TSimpleModel.First;
@@ -1501,6 +1616,9 @@ end;
 procedure TSimpleModel.GenerateScript;
 begin
   Clear;
+  // Where/OrderBy/Limit without a Select used to produce "SELECT  FROM"
+  if Trim(FScriptFieldNames) = '' then
+    FScriptFieldNames := '*';
   Data.SQL.Text := 'SELECT ' + FScriptFieldNames;
   Data.SQL.Add( 'FROM ' + FTableName);
   if FScriptWhere <> '' then
@@ -1572,8 +1690,7 @@ begin
   Result := False;
   if Data.SQL.Text = '' then
     Exit;
-  Data.UniDirectional := AUniDirectional;
-  Result := _queryOpen;
+  Result := _queryOpen( AUniDirectional);
   if not Result then
     Exit;
   try
@@ -1597,7 +1714,7 @@ end;
 initialization
   DB_LibLoader := TSQLDBLibraryLoader.Create( nil);
   DB_Transaction := TSQLTransaction.Create( nil);
-  DB_Connector := TSQLConnector.Create( nil);
+  DB_Connector := TFPSQLConnector.Create( nil);
   DB_Connector.Transaction := DB_Transaction;
 
   DB_Connector_Write := nil;

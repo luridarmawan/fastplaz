@@ -48,10 +48,9 @@ var
   VJSONData: TJSONData = nil;
   VJSONParser: TLocalJSONParser;
 begin
+  Result := str;
   if str = '' then
     Exit;
-  ;
-  Result := str;
   VJSONParser := TLocalJSONParser.Create(str, [joStrict, joUTF8]);
   try
     //VJSONParser.Strict := True; // deprecated
@@ -78,8 +77,14 @@ end;
 procedure TInitializeModule.RequestHandler(Sender: TObject; ARequest: TRequest;
   AResponse: TResponse; var Handled: boolean);
 begin
+  // Redirect only sends the response, it does not stop this handler;
+  // without the Exit an existing configuration was overwritten
   if FileExists('config/config.json') then
+  begin
     Redirect(BaseURL);
+    Handled := True;
+    Exit;
+  end;
 
   InitializeApp;
 
@@ -102,6 +107,7 @@ begin
     Add('</filesmatch>');
   end;
   ContentFile := TStringList.Create;
+  try
   ContentFile.Text := _APP_URL;
   CreateDirCustom('config', True);
   CreateDirCustom('files', True);
@@ -214,8 +220,10 @@ begin
     Free;
   end;
 
-  FreeAndNil(ContentFile);
-  FreeAndNil(htaccess);
+  finally
+    FreeAndNil(ContentFile);
+    FreeAndNil(htaccess);
+  end;
   Result := True;
 end;
 

@@ -1,20 +1,11 @@
 unit config_lib;
 
-{$IF ((FPC_VERSION >= 2) and (FPC_RELEASE >= 5) and (FPC_PATCH >= 1))}
-  {$DEFINE LSNEWFPC}
-{$ENDIF}
-{$DEFINE LSNEWFPC}// force bypass
-
 {$mode objfpc}{$H+}
 
 interface
 
 uses
-  fpcgi, jsonConf, fpjson, jsonparser, jsonscanner, variants,
-  {$IFDEF LSNEWFPC}
-  {$ELSE}
-  jsonscanner,
-  {$ENDIF}
+  jsonConf, fpjson, jsonparser, jsonscanner, variants,
   Classes, SysUtils;
 
 const
@@ -25,11 +16,7 @@ type
 
   TLocalJSONParser = class(TJSONParser)
   public
-{$IFDEF LSNEWFPC}
     property Scanner;
-{$ELSE}
-    property Scanner: TJSONScanner read FScanner;
-{$ENDIF}
   end;
 
   { TMyConfig }
@@ -48,9 +35,15 @@ type
       default;
     property IsValid: boolean read FIsValid;
 
+    // nil when the path does not exist or is not an object
     function GetObject(AKeyName: UnicodeString): TJSONObject;
 
+    // Parses ConfigFileName; on success Status = 0, IsValid = True and the
+    // file becomes the active config. On a parse error Status = 2 and
+    // Message holds the position.
     function ValidateFile(ConfigFileName: string): boolean;
+    // Replaces the node at APath with a copy of AValue. The caller keeps
+    // ownership of AValue.
     procedure SetDataValue(const APath: UnicodeString; const AValue: TJSONData);
 
   end;
@@ -71,11 +64,15 @@ end;
 
 function TMyConfig.GetObject(AKeyName: UnicodeString): TJSONObject;
 begin
+  Result := nil;
+  if AKeyName = '' then
+    Exit;
   try
     if (AKeyName[Length(AKeyName)] <> '/') then
       AKeyName := AKeyName + '/';
     Result := FindObject(AKeyName, False);
   except
+    Result := nil;
   end;
 end;
 
@@ -96,18 +93,15 @@ var
 begin
   Result := '';
   try
-    El := FindElement(StripSlash(UnicodeString(KeyName)), False);
-    if El.JSONType = jtArray then
-    begin
-      Result := El.AsJSON;
-    end
+    El := FindElement(StripSlash(UnicodeString(KeyName)), False, True);
+    if not Assigned(El) then
+      Exit;
+    // containers are returned as their JSON text, scalars as text
+    if El.JSONType in [jtArray, jtObject] then
+      Result := El.AsJSON
     else
-    begin
       Result := El.AsString;
-    end;
   except
-    //    on e: Exception do
-    //      die(e.Message);
   end;
 end;
 
@@ -133,62 +127,67 @@ var
   VJSONParser: TLocalJSONParser;
 begin
   Result := False;
+  FIsValid := False;
   if not FileExists(ConfigFileName) then
+  begin
+    Status := 1;
+    Message := _ERR_CONFIG_FILENOTEXIST;
     Exit;
+  end;
 
   lst := TStringList.Create;
-  lst.LoadFromFile(ConfigFileName);
-
-  VJSONParser := TLocalJSONParser.Create(lst.Text, [joStrict, joUTF8]);
+  VJSONParser := nil;
   try
+    lst.LoadFromFile(ConfigFileName);
+    VJSONParser := TLocalJSONParser.Create(lst.Text, [joStrict, joUTF8]);
     try
-      //VJSONParser.Strict := True; //deprecated, use joStrict
       VJSONData := VJSONParser.Parse;
-      lst.Text := VJSONData.FormatJSON([], 2);
+      if not (VJSONData is TJSONObject) then
+      begin
+        Status := 2;
+        Message := _ERR_CONFIG_INVALID;
+        Exit;
+      end;
     except
       on E: Exception do
       begin
         Status := 2;
         Message := 'Config Error at line ' + IntToStr(VJSONParser.Scanner.CurRow) +
           ',' + IntToStr(VJSONParser.Scanner.CurColumn + 1);
-        //if AppData.debug then
-        //  Message:= Message + ': ' + VJSONParser.Scanner.CurLine ;
-        FreeAndNil(VJSONData);
-        FreeAndNil(VJSONParser);
-        FreeAndNil(lst);
         Exit;
       end;
     end;
   finally
     FreeAndNil(VJSONData);
     FreeAndNil(VJSONParser);
+    FreeAndNil(lst);
   end;
 
-  FreeAndNil(lst);
   Status := 0;
+  Message := '';
   Filename := ConfigFileName;
+  FIsValid := True;
+  Result := True;
 end;
 
 procedure TMyConfig.SetDataValue(const APath: UnicodeString;
   const AValue: TJSONData);
 var
-  lst: TStrings;
-  El: TJSONData;
   elName: UnicodeString;
-  A : TJSONArray;
   O: TJSONObject;
+  i: integer;
 begin
-  El :=FindNodeForValue(aPath,TJSONObject,O,elName);
-  if not Assigned(el) then
-  begin
-    El := GetJSON(AValue.AsJSON);
-    O.Add(UTF8Encode(elName), El);
-  end
-  else
-  begin
-    A := El as TJSONArray;
-    A.Add(AValue);
-  end;
+  if not Assigned(AValue) then
+    Exit;
+  // locate (and create) the parent object; the element itself is looked up
+  // by name so that a node of any type gets replaced
+  FindElement(StripSlash(APath), True, O, elName, True);
+  if (not Assigned(O)) or (elName = '') then
+    Exit;
+  i := O.IndexOfName(UTF8Encode(elName));
+  if i <> -1 then
+    O.Delete(i);
+  O.Add(UTF8Encode(elName), AValue.Clone);
   FModified := True;
 end;
 

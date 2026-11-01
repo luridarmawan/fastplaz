@@ -24,8 +24,8 @@
     </CompilerOptions>
     <Description Value="FastPlaz RunTime
 "/>
-    <Version Minor="24" Release="11" Build="14"/>
-    <Files Count="48">
+    <Version Major="1" Release="11" Build="14"/>
+    <Files Count="49">
       <Item1>
         <Filename Value="../FastPlaz/define_fastplaz.inc"/>
         <Type Value="Include"/>
@@ -219,6 +219,10 @@
         <Filename Value="../FastPlaz/src/library/commonbase_lib.pas"/>
         <UnitName Value="commonbase_lib"/>
       </Item48>
+      <Item49>
+        <Filename Value="../FastPlaz/src/library/smtp_lib.pas"/>
+        <UnitName Value="smtp_lib"/>
+      </Item49>
     </Files>
     <CompatibilityMode Value="True"/>
     <i18n>

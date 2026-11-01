@@ -64,7 +64,7 @@ type
     procedure SetPayloads(AName: string; AValue: string);
   public
     constructor Create;
-    destructor Destroy;
+    destructor Destroy; override;
     property Payloads[AName: string]: string read GetPayloads write SetPayloads; default;
     function Send: boolean;
   published
@@ -82,8 +82,6 @@ implementation
 const
   GOOGLEANALYTICS_BASEURL = 'https://www.google-analytics.com/collect?payload_data&';
 
-var
-  Response: IHTTPResponse;
 
 { TGoogleAnalyticsIntegration }
 
@@ -113,6 +111,7 @@ end;
 destructor TGoogleAnalyticsIntegration.Destroy;
 begin
   FPayLoads.Free;
+  inherited Destroy;
 end;
 
 function TGoogleAnalyticsIntegration.Send: boolean;
@@ -137,20 +136,21 @@ begin
   FPayLoads.Text := Trim(FPayLoads.Text);
   for i := 0 to FPayLoads.Count - 1 do
   begin
-    payloadURL := payloadURL + FPayLoads.Names[i] + '=' +
-      FPayLoads.ValueFromIndex[i] + '&';
+    payloadURL := payloadURL + UrlEncode(FPayLoads.Names[i]) + '=' +
+      UrlEncode(FPayLoads.ValueFromIndex[i]) + '&';
   end;
   payloadURL := Trim(GOOGLEANALYTICS_BASEURL + payloadURL);
   FURL := payloadURL;
 
   with THTTPLib.Create(payloadURL) do
-  begin
+  try
     httpResponse := Post;
     if httpResponse.ResultCode = 200 then
     begin
       FIsSuccessfull := True;
       Result := True;
     end;
+  finally
     Free;
   end;
 

@@ -1,7 +1,7 @@
 unit newrelic_integration;
 
 {$mode objfpc}{$H+}
-{$include ../../define.inc}
+{ $include ../../define.inc}
 
 interface
 
@@ -9,7 +9,6 @@ uses
   http_lib,
   Classes, SysUtils;
 
-{$ifdef NEWRELIC_INTEGRATION}
 const
   NEWRELIC_URL = 'https://api.newrelic.com/deployments.xml';
 
@@ -46,11 +45,7 @@ type
     property IsSuccessfull: boolean read FIsSuccessfull;
   end;
 
-{$endif}
-
 implementation
-
-{$ifdef NEWRELIC_INTEGRATION}
 
 { TNewrelicIntegration }
 
@@ -86,25 +81,24 @@ begin
 
   FIsSuccessfull := False;
   with THTTPLib.Create(URL) do
-  begin
+  try
     ContentType := 'application/x-www-form-urlencoded';
     AddHeader('Connection', 'keep-alive');
     AddHeader('Cache-Control', 'no-cache');
     AddHeader('Accept', '*/*');
     AddHeader('x-api-key', FAPIKey);
-    FormData['deployment[app_name]'] := UrlEncode( FAppName);
-    FormData['deployment[application_id]'] := UrlEncode( FApplicationID);
-    FormData['deployment[description]'] := UrlEncode( FDescription);
-    FormData['deployment[revision]'] := UrlEncode( FRevision);
-    FormData['deployment[changeLog]'] := UrlEncode( FChangeLog);
-    FormData['deployment[user]'] := UrlEncode( FUser);
+    FormData['deployment[app_name]'] := FAppName; // encoded by THTTPLib
+    FormData['deployment[application_id]'] := FApplicationID; // encoded by THTTPLib
+    FormData['deployment[description]'] := FDescription; // encoded by THTTPLib
+    FormData['deployment[revision]'] := FRevision; // encoded by THTTPLib
+    FormData['deployment[changeLog]'] := FChangeLog; // encoded by THTTPLib
+    FormData['deployment[user]'] := FUser; // encoded by THTTPLib
     Result := Post;
     FIsSuccessfull := IsSuccessfull;
+  finally
     Free;
   end;
 
 end;
-
-{$endif}
 
 end.
