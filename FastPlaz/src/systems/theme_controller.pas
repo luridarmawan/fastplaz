@@ -224,7 +224,7 @@ var
 
 implementation
 
-uses config_lib, logutil_lib, language_lib, versioninfo_lib, html_lib, session_controller,
+uses config_lib, logutil_lib, language_lib, versioninfo_lib, html_lib, session_controller, md5,
   initialize_controller;
 
 { THTMLHead }
@@ -1056,6 +1056,10 @@ begin
     pathinfo := copy(pathinfo, 2, length(pathinfo) - 1);
   if pathinfo = '' then
     pathinfo := 'home';
+  // a visitor with session data (logged in, a form token, ...) gets a page
+  // cache of their own; the shared file is only for stateless visitors
+  if SessionController.IsStarted and (SessionController.GetData <> '') then
+    pathinfo := pathinfo + '-' + Copy(MD5Print(MD5String(SessionController.SessionID)), 1, 16);
   Result := ExtractFileDir(Application.ExeName) + DirectorySeparator + AppData.tempDir +
     DirectorySeparator + 'cache' + DirectorySeparator + GetActiveModuleName(Application.Request) +
     DirectorySeparator + SafeText( pathinfo) + '-' + LANG + '.html';
@@ -1376,90 +1380,118 @@ begin
   end;
 end;
 
+// Expands every [foreach ...] ... [/foreach ...] block. Blocks are matched
+// by nesting depth, so a foreach inside a foreach body is left to the row
+// rendering (table/dataset rows go through RenderFromContent) or to the
+// next pass over the expanded output (json rows).
 function TThemeUtil.ForeachProcessor(TagProcessor: TReplaceTagEvent;
   Content: string): string;
+const
+  OPEN_TAG = '[foreach ';
+  CLOSE_TAG = '[/foreach';
 
-  function DoForeach(var ARegex: TRegExpr; var AContent: String; IsNext: Boolean = False): Boolean;
+  function RunForeach(const AHeader, ABody: string): string;
   var
     parameter: TStrings;
-    html : string;
+    savedKey, savedItem: string;
+    savedIndex: integer;
   begin
-    Result := False;
-    parameter := Explode(string(ARegex.Match[1]), ' ');
-    ForeachTable_Keyname  := parameter.Values['from'];
-    ForeachTable_Itemname := parameter.Values['item'];
+    Result := '';
+    // an inner loop (run while rendering a table/dataset row) must hand the
+    // outer loop its state back
+    savedKey := ForeachTable_Keyname;
+    savedItem := ForeachTable_Itemname;
+    savedIndex := foreachJsonIndex;
+    parameter := Explode(AHeader, ' ');
+    try
+      ForeachTable_Keyname  := parameter.Values['from'];
+      ForeachTable_Itemname := parameter.Values['item'];
 
-    case parameter.Values['type'] of
-      '' : begin
-        DisplayError( 'field "type" is not define in "foreach ' + string(ARegex.Match[1]) + '"');
-        //FastPlasAppandler.DieRaise('field "type" is not define in "foreach ' + Match[1] + '"',[]);
+      case parameter.Values['type'] of
+        '' : begin
+          DisplayError( 'field "type" is not define in "foreach ' + AHeader + '"');
+        end;
+        'table' : begin
+          Result := ForeachProcessor_Table(TagProcessor, parameter.Values['from'], ABody);
+        end;
+        'dataset' : begin
+          Result := ForeachProcessor_Dataset(TagProcessor, parameter.Values['from'], ABody);
+        end;
+        'json', 'jsondata' : begin
+          Result := ForeachProcessor_Json(TagProcessor, parameter.Values['from'], ABody);
+        end;
+        {$ifdef GREYHOUND}
+        'ghtable' : begin
+          Result := ForeachProcessor_GreyhoundTable(TagProcessor, parameter.Values['from'], ABody);
+        end;
+        {$endif GREYHOUND}
+        'array' : begin
+          DisplayError( __( __Err_Theme_ForeachNotImplemented));
+        end;
       end;
-      'table' : begin
-        html := ForeachProcessor_Table(TagProcessor, parameter.Values['from'], string(ARegex.Match[2]));
-      end;
-      'dataset' : begin
-        html := ForeachProcessor_Dataset(TagProcessor, parameter.Values['from'], string(ARegex.Match[2]));
-      end;
-      'json' : begin
-        html := ForeachProcessor_Json(TagProcessor, parameter.Values['from'], string(ARegex.Match[2]));
-      end;
-      'jsondata' : begin
-        html := ForeachProcessor_Json(TagProcessor, parameter.Values['from'], string(ARegex.Match[2]));
-      end;
-      {$ifdef GREYHOUND}
-      'ghtable' : begin
-        html := ForeachProcessor_GreyhoundTable(TagProcessor, parameter.Values['from'], Match[2]);
-      end;
-      {$endif GREYHOUND}
-      'array' : begin
-        DisplayError( __( __Err_Theme_ForeachNotImplemented));
-        //FastPlasAppandler.DieRaise(__( __Err_Theme_ForeachNotImplemented),[]);
-      end;
+    finally
+      ForeachTable_Keyname := savedKey;
+      ForeachTable_Itemname := savedItem;
+      foreachJsonIndex := savedIndex;
+      FreeAndNil( parameter);
     end;
-
-    //-- proccess conditional if
-    //html := ConditionalIfProcessor( TagProcessor, html);
-
-    ForeachTable_Keyname := '';
-    ForeachTable_Itemname := '';
-
-    html := StringReplace( AContent, string(ARegex.Match[0]), html, [rfReplaceAll]);
-
-    //** call parent tag-controller
-
-    ForeachTable_Keyname := '';
-    ForeachTable_Itemname:= '';
-    FreeAndNil( parameter);
-
-    AContent := html;
-    Result := true;
   end;
 
 var
-  parameter : TStrings;
-  html : string;
-  regex : TRegExpr;
+  startPos, headEnd, p, depth, closeStart, closeEnd, nextOpen, nextClose: integer;
+  header, body: string;
 begin
   Result := Content;
-  regex := TRegExpr.Create;
-  with regex do
-  begin
-    Expression := RegExprString(Format('%s(.*?)%s', [ __FOREACH_START, __FOREACH_END]));
-    if Exec( RegExprString(Result)) then
+  startPos := 1;
+  repeat
+    startPos := PosEx(OPEN_TAG, Result, startPos);
+    if startPos = 0 then
+      Break;
+    headEnd := PosEx(FEndDelimiter, Result, startPos);
+    if headEnd = 0 then
+      Break;
+    header := Copy(Result, startPos + Length(OPEN_TAG), headEnd - startPos - Length(OPEN_TAG));
+
+    // the matching close: same depth
+    depth := 1;
+    p := headEnd + 1;
+    closeStart := 0;
+    while depth > 0 do
     begin
-      if not DoForeach(regex, Result) then
+      nextOpen := PosEx(OPEN_TAG, Result, p);
+      nextClose := PosEx(CLOSE_TAG, Result, p);
+      if nextClose = 0 then
+        Break;
+      if (nextOpen > 0) and (nextOpen < nextClose) then
       begin
-        Free;
-        Exit;
-      end;
-      while ExecNext do
+        Inc(depth);
+        p := nextOpen + Length(OPEN_TAG);
+      end
+      else
       begin
-        //die(result);
-        DoForeach(regex, Result, True)
+        Dec(depth);
+        if depth = 0 then
+          closeStart := nextClose
+        else
+          p := nextClose + Length(CLOSE_TAG);
       end;
     end;
-    Free;
-  end;
+    if closeStart = 0 then
+    begin
+      // unclosed: leave the tag as it is and look further
+      startPos := headEnd + 1;
+      Continue;
+    end;
+    closeEnd := PosEx(FEndDelimiter, Result, closeStart);
+    if closeEnd = 0 then
+      Break;
+
+    body := Copy(Result, headEnd + 1, closeStart - headEnd - 1);
+    Result := Copy(Result, 1, startPos - 1) + RunForeach(header, body)
+      + Copy(Result, closeEnd + 1, Length(Result));
+    // the next search starts inside the expanded block: a nested foreach
+    // that survived the row rendering is expanded now
+  until False;
 end;
 
 function TThemeUtil.ForeachProcessor_Table(TagProcessor: TReplaceTagEvent;
@@ -1477,6 +1509,9 @@ begin
 
   html := '';
   i := 1;
+  // a cursor left on a later row (or at EOF) rendered nothing
+  if TSQLQuery( assignVarMap[KeyName]^).Active then
+    TSQLQuery( assignVarMap[KeyName]^).First;
   while not TSQLQuery( assignVarMap[KeyName]^).EOF do
   begin
     ThemeUtil.Assign('$index', i.ToString);
@@ -1528,6 +1563,8 @@ begin
 
   html := '';
   i := 1;
+  if TDataSet( assignVarMap[KeyName]^).Active then
+    TDataSet( assignVarMap[KeyName]^).First;
   while not TDataSet( assignVarMap[KeyName]^).EOF do
   begin
     ThemeUtil.Assign('$index', i.ToString);
@@ -1814,8 +1851,10 @@ begin
   end;
   if ForeachTable_Keyname = '' then
     Exit;
-  // conditionals are evaluated after the row is rendered; keep them intact
-  if (Pos( 'if ', TagString) = 1) or (TagString = 'else') or (TagString = '/if') then
+  // conditionals and nested loops are evaluated after the row is rendered;
+  // keep them intact
+  if (Pos( 'if ', TagString) = 1) or (TagString = 'else') or (TagString = '/if')
+    or (Pos( 'foreach ', TagString) = 1) or (Pos( '/foreach', TagString) = 1) then
   begin
     ReplaceText := FStartDelimiter + TagString + FEndDelimiter;
     Exit;
@@ -1844,6 +1883,16 @@ begin
     FreeAndNil( tag_with_filter);
   end;
   fieldName := tagstring_custom.Values['index'];
+  // a field tag of another loop's item (a nested foreach) is left for
+  // that loop
+  if (fieldName <> '') and (tagstring_custom.Count > 0)
+    and (tagstring_custom[0] <> ForeachTable_Itemname)
+    and (tagstring_custom[0] <> ForeachTable_Keyname) then
+  begin
+    ReplaceText := FStartDelimiter + TagString + FEndDelimiter;
+    FreeAndNil( tagstring_custom);
+    Exit;
+  end;
 
   try
     ReplaceText := TDataSet( assignVarMap[ForeachTable_Keyname]^).FieldByName( fieldName).AsString;
@@ -1885,8 +1934,10 @@ begin
   end;
   if ForeachTable_Keyname = '' then
     Exit;
-  // conditionals are evaluated after the row is rendered; keep them intact
-  if (Pos( 'if ', TagString) = 1) or (TagString = 'else') or (TagString = '/if') then
+  // conditionals and nested loops are evaluated after the row is rendered;
+  // keep them intact
+  if (Pos( 'if ', TagString) = 1) or (TagString = 'else') or (TagString = '/if')
+    or (Pos( 'foreach ', TagString) = 1) or (Pos( '/foreach', TagString) = 1) then
   begin
     ReplaceText := FStartDelimiter + TagString + FEndDelimiter;
     Exit;
@@ -1915,6 +1966,16 @@ begin
     FreeAndNil( tag_with_filter);
   end;
   fieldName := tagstring_custom.Values['index'];
+  // a field tag of another loop's item (a nested foreach) is left for
+  // that loop
+  if (fieldName <> '') and (tagstring_custom.Count > 0)
+    and (tagstring_custom[0] <> ForeachTable_Itemname)
+    and (tagstring_custom[0] <> ForeachTable_Keyname) then
+  begin
+    ReplaceText := FStartDelimiter + TagString + FEndDelimiter;
+    FreeAndNil( tagstring_custom);
+    Exit;
+  end;
 
   if tagstring_custom.Values['assignto'] <> '' then
   begin
@@ -2264,17 +2325,22 @@ begin
       ReplaceText := GetDebugInfo( 'time');
     end;
     'flashmessages' : begin
+      // usage: [flashmessages class="..."] ; [flashmessages html=1] keeps
+      // markup in the messages (they are HTML encoded otherwise)
       s := FlashMessages;
       ReplaceText := '';
       if s <> '' then
       begin
         str := Explode( s, '|');
         try
-          ReplaceText := '<div id="flashmessages" class="alert alert-warning alert-dismissable '+tagstring_custom.Values['class']+'"><h4><i class="icon fa fa-ban"></i> Warning!</h4><ul>';
+          ReplaceText := '<div id="flashmessages" class="alert alert-warning alert-dismissable '+HTMLEncode(tagstring_custom.Values['class'])+'"><h4><i class="icon fa fa-ban"></i> Warning!</h4><ul>';
           for i:=0 to str.Count-1 do
           begin
             if str[i] = '' then Continue;
-            ReplaceText:= ReplaceText + '<li>'+str[i]+'</li>';
+            if (tagstring_custom.Values['html'] = '1') or (tagstring_custom.Values['html'] = 'true') then
+              ReplaceText:= ReplaceText + '<li>'+str[i]+'</li>'
+            else
+              ReplaceText:= ReplaceText + '<li>'+HTMLEncode(str[i])+'</li>';
           end;
           ReplaceText:= ReplaceText + '</ul></div>';
         finally
