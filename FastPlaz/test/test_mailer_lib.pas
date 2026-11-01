@@ -22,6 +22,7 @@ type
     procedure TestAddToCcBccGoToSeparateLists;
     procedure TestClearResetsLists;
     procedure TestSendWithoutServerReportsError;
+    procedure TestHeloNameForSender;
     procedure TestCreateAndFree;
   end;
 
@@ -126,6 +127,18 @@ begin
     m.Free;
   end;
   {$ENDIF}
+end;
+
+procedure TMailerLibTest.TestHeloNameForSender;
+begin
+  AssertEquals('example.com', HeloNameForSender('noreply@example.com'));
+  AssertEquals('mail.example.com', HeloNameForSender('"Carik" <noreply@mail.example.com>'));
+  AssertEquals('example.com', HeloNameForSender('  a@example.com  '));
+  AssertEquals('no address', 'localhost', HeloNameForSender('not-an-address'));
+  AssertEquals('empty', 'localhost', HeloNameForSender(''));
+  AssertEquals('empty domain', 'localhost', HeloNameForSender('a@'));
+  AssertEquals('unsafe characters', 'localhost', HeloNameForSender('a@ex ample.com'));
+  AssertEquals('injection', 'localhost', HeloNameForSender('a@x.y' + #13#10 + 'QUIT'));
 end;
 
 procedure TMailerLibTest.TestCreateAndFree;
