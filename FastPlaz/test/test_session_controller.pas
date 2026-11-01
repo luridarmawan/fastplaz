@@ -50,6 +50,7 @@ type
     procedure TestRestartSession;
     procedure TestRegenerateIDMovesData;
     procedure TestGetData;
+    procedure TestStartAgainAfterForcedEnd;
   end;
 
   { TSessionDatabaseTest }
@@ -647,6 +648,30 @@ begin
     s['a'] := '1';
     AssertTrue(s.GetData.Contains('a=1'));
     AssertTrue(s.GetData.Contains('[' + _SESSION_SESSION + ']'));
+  finally
+    s.Free;
+  end;
+end;
+
+// EndSession(True) left the controller "started and terminated": in a
+// daemon the next request could never open a session again
+procedure TSessionFileTest.TestStartAgainAfterForcedEnd;
+var
+  s: TSessionController;
+begin
+  s := NewSession;
+  try
+    AssertTrue(s.StartSession);
+    s['a'] := '1';
+    s.EndSession(True);
+    AssertTrue(s.IsTerminated);
+    AssertFalse(s.IsStarted);
+    AssertTrue(s.StartSession);
+    AssertFalse(s.IsTerminated);
+    AssertTrue(s.IsStarted);
+    s['b'] := '2';
+    AssertEquals('2', s['b']);
+    AssertEquals('', s['a']);
   finally
     s.Free;
   end;
