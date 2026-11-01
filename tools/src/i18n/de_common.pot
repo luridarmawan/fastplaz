@@ -60,6 +60,18 @@ msgstr ""
 msgid "JSON Validator && Formatter"
 msgstr ""
 
+#: de_common.rs_open_terminal_menu
+msgid "Open Console/Terminal"
+msgstr ""
+
+#: de_common.rs_open_terminal_not_found
+msgid "No terminal application found. Set the TERMINAL environment variable."
+msgstr ""
+
+#: de_common.rs_open_terminal_no_directory
+msgid "No saved project or file is open, nothing to open the terminal in."
+msgstr ""
+
 #: de_common.rs_regex_tester_menu
 msgid "Regex Tester"
 msgstr ""
