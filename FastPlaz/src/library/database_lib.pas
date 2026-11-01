@@ -1146,27 +1146,35 @@ begin
   end;
 end;
 
+// Die does not stop the request, so both overloads return False when the
+// model has no primary key instead of running "WHERE =<value>".
 function TSimpleModel.Find(const KeyIndex: integer): boolean;
 var
   s : string;
 begin
+  Result := False;
   if primaryKey = '' then
   begin
-    Die( 'primayKey not defined');
+    Die( 'primaryKey not defined');
+    Exit;
   end;
   s := primaryKey + '=' + i2s( KeyIndex);
   result := Find( [s], '');
 end;
 
+// The key is quoted with QuoteValue: it used to be concatenated as is, so a
+// key such as "O'Brien" broke the query and "1' OR '1'='1" matched every row.
 function TSimpleModel.Find(const KeyIndex: String): boolean;
 var
   s : string;
 begin
+  Result := False;
   if primaryKey = '' then
   begin
-    Die( 'primayKey not defined');
+    Die( 'primaryKey not defined');
+    Exit;
   end;
-  s := primaryKey + '=''' + KeyIndex + '''';
+  s := primaryKey + '=' + QuoteValue(KeyIndex);
   result := Find( [s], '');
 end;
 
@@ -1550,8 +1558,7 @@ begin
   Result := Delete( primaryKey+'='+i2s(ID));
 end;
 
-// Marks rows as deleted instead of removing them. This used to be a stub
-// that returned False, so Delete with UseSoftDelete did nothing.
+// SQL string literal for AValue; MySQL also treats backslash as an escape.
 function TSimpleModel.QuoteValue(const AValue: string): string;
 var
   s: string;
@@ -1562,6 +1569,8 @@ begin
   Result := QuotedStr(s);
 end;
 
+// Marks rows as deleted instead of removing them. This used to be a stub
+// that returned False, so Delete with UseSoftDelete did nothing.
 function TSimpleModel.SoftDelete(Where: string; AutoCommit: boolean): boolean;
 var
   s: string;

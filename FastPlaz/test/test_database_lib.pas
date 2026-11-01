@@ -47,6 +47,7 @@ type
     procedure TestUpdateWithoutRecordIsNoop;
     procedure TestFindWhereOrderLimit;
     procedure TestFindNoMatch;
+    procedure TestFindStringKeyIsQuoted;
     procedure TestAllAndRecordCount;
     procedure TestAsJsonArray;
     procedure TestDeleteWhereAndById;
@@ -332,6 +333,28 @@ procedure TSimpleModelSQLiteTest.TestFindNoMatch;
 begin
   AssertFalse(FModel.Find(['city=''Nowhere''']));
   AssertFalse(FModel.Find(999));
+end;
+
+// Find(string) used to concatenate the key into the WHERE clause
+procedure TSimpleModelSQLiteTest.TestFindStringKeyIsQuoted;
+var
+  m: TSimpleModel;
+begin
+  Exec('INSERT INTO persons (name, age, city) VALUES (''O''''Brien'', 50, ''Dublin'')');
+  // an injection attempt must not match every row
+  AssertFalse(FModel.Find('1'' OR ''1''=''1'));
+  AssertTrue(FModel.Find('3'));
+  AssertEquals('Tono', string(FModel['name']));
+
+  m := TSimpleModel.Create('persons', 'name');
+  try
+    AssertTrue(m.Find('O''Brien'));
+    AssertEquals(1, m.RecordCount);
+    AssertEquals('Dublin', string(m['city']));
+    AssertFalse(m.Find('x'' OR name<>''x'));
+  finally
+    m.Free;
+  end;
 end;
 
 procedure TSimpleModelSQLiteTest.TestAllAndRecordCount;
