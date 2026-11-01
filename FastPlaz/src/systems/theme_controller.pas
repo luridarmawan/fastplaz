@@ -100,6 +100,14 @@ type
     isRenderingModule : boolean;
     foreachJsonIndex : integer;
     FIncludeDepth : integer;
+    // per instance; these were unit globals shared (and freed) by every
+    // TThemeUtil, so a second instance corrupted the first
+    assignVarMap : TAssignVarMap;
+    FAssignVarStringMap : TStringList;
+    ForeachTable_Keyname,
+    ForeachTable_Itemname : string;
+    FTagAssign_Variable : TStringList;
+    FOwnsHTMLUtil, FOwnsTagCallbackMap : boolean;
     function GetAssignVar(const TagName: String): Pointer;
     function GetBaseURL: string;
     function GetFlashMessage: string;
@@ -131,8 +139,6 @@ type
     function GetDebugClassMethod( const DebugType:string = ''):string;
     function GetDebugHeadersData( const DebugType:string = ''):string;
     function GetDebugSessionData( const DebugType:string = ''):string;
-
-    function DoTrimWhiteSpace(const Content:string;ForceTrim:boolean=false):string;
 
     //- cache
     function getCacheFileName: string;
@@ -206,6 +212,7 @@ type
 
     property TrimWhiteSpace:boolean read FTrimWhiteSpace write SetTrimWhiteSpace;
     property TrimForce:boolean read FTrimForce write SetTrimForce;
+    function DoTrimWhiteSpace(const Content:string;ForceTrim:boolean=false):string;
     procedure AddJS( const FileName:string);
     procedure AddCSS( const FileName:string; const Media:string='all');
     procedure AddMeta( const Name:string; const Content:string; const MetaType:string = 'name');
@@ -219,13 +226,6 @@ implementation
 
 uses config_lib, logutil_lib, language_lib, versioninfo_lib, html_lib, session_controller,
   initialize_controller;
-
-var
-  assignVarMap : TAssignVarMap;
-  FAssignVarStringMap : TStringList;
-  ForeachTable_Keyname,
-  ForeachTable_Itemname : string;
-  FTagAssign_Variable : TStringList;
 
 { THTMLHead }
 
@@ -275,12 +275,14 @@ begin
 end;
 
 function TThemeUtil.GetAssignVar(const TagName: String): Pointer;
+var
+  i: integer;
 begin
-  try
-    Result := assignVarMap[TagName];
-  except
-    Result := nil;
-  end;
+  i := assignVarMap.IndexOf(TagName);
+  if i = -1 then
+    Result := nil
+  else
+    Result := assignVarMap.Data[i];
 end;
 
 function TThemeUtil.GetBaseURL: string;
@@ -303,8 +305,7 @@ end;
 
 procedure TThemeUtil.SetCacheTime(AValue: integer);
 begin
-  if FCacheTime=AValue then Exit;
-  FCacheTime:=AValue - 1;
+  FCacheTime:=AValue;
 end;
 
 procedure TThemeUtil.SetFlashMessage(AValue: string);
@@ -627,6 +628,9 @@ begin
   if Filter = '' then
     Exit;
   case Filter of
+    'escape', 'html', 'htmlspecialchars' : begin
+      Result := HTMLEncode( Content);
+    end;
     'nl2br' : begin
       Result := StringReplace( Content, #13#10, #10, [rfReplaceAll]);
       Result := StringReplace( Result, #13, #10, [rfReplaceAll]);
@@ -653,7 +657,7 @@ begin
     begin
       try
         i := StrToInt(Content);
-        Result := FormatDateTime('dd MMM yyyy', UnixToDateTime(i));
+        Result := FormatDateTime('dd MMM yyyy', UnixToDateTime(i, False));
       except
       end;
     end;
@@ -879,7 +883,7 @@ begin
   for i := 0 to Application.Request.QueryFields.Count -1 do
   begin
     html  := html + '<tr>';
-    html  := html + '<td>'+Application.Request.QueryFields.Names[i]+'</td><td>:</td><td>' + Application.Request.QueryFields.ValueFromIndex[i] + '</td>';
+    html  := html + '<td>'+HTMLEncode(Application.Request.QueryFields.Names[i])+'</td><td>:</td><td>' + HTMLEncode(Application.Request.QueryFields.ValueFromIndex[i]) + '</td>';
     html  := html + '</tr>';
   end;
   html  := html + '</table>';
@@ -904,7 +908,7 @@ begin
   for i := 0 to Application.Request.ContentFields.Count -1 do
   begin
     html  := html + '<tr>';
-    html  := html + '<td>'+Application.Request.ContentFields.Names[i]+'</td><td>:</td><td>' + Application.Request.ContentFields.ValueFromIndex[i] + '</td>';
+    html  := html + '<td>'+HTMLEncode(Application.Request.ContentFields.Names[i])+'</td><td>:</td><td>' + HTMLEncode(Application.Request.ContentFields.ValueFromIndex[i]) + '</td>';
     html  := html + '</tr>';
   end;
   html  := html + '</table>';
@@ -934,35 +938,35 @@ begin
   html := html + '<fieldset>';
   html := html + '<legend>Header Data</legend>';
   html  := html + '<table>';
-  html := html + '<tr><td>REDIRECT_STATUS</td><td>:</td><td>' + Application.EnvironmentVariable['REDIRECT_STATUS'] + '</td></tr>';
-  html := html + '<tr><td>HTTP_ACCEPT</td><td>:</td><td>' + Application.Request.Accept + '</td></tr>';
-  html := html + '<tr><td>HTTP_USER_AGENT</td><td>:</td><td>' + Application.Request.UserAgent + '</td></tr>';
-  html := html + '<tr><td>HTTP_CONNECTION</td><td>:</td><td>' + Application.Request. Connection + '</td></tr>';
-  html := html + '<tr><td>HTTP_REFERER</td><td>:</td><td>' + Application.Request.Referer + '</td></tr>';
-  html := html + '<tr><td>SERVER_NAME</td><td>:</td><td>' + Application.EnvironmentVariable['SERVER_NAME'] + '</td></tr>';
-  html := html + '<tr><td>SERVER_ADDR</td><td>:</td><td>' + Application.EnvironmentVariable['SERVER_ADDR'] + '</td></tr>';
-  html := html + '<tr><td>REMOTE_HOST</td><td>:</td><td>' + Application.Request.RemoteHost + '</td></tr>';
-  html := html + '<tr><td>REMOTE_ADDR</td><td>:</td><td>' + Application.Request.RemoteAddress + '</td></tr>';
-  html := html + '<tr><td>REMOTE_PORT</td><td>:</td><td>' + Application.EnvironmentVariable['REMOTE_PORT'] + '</td></tr>';
-  html := html + '<tr><td>SCRIPT_NAME</td><td>:</td><td>' + Application.Request.ScriptName + '</td></tr>';
-  html := html + '<tr><td>SCRIPT_FILENAME</td><td>:</td><td>' + Application.EnvironmentVariable['SCRIPT_FILENAME'] + '</td></tr>';
-  html := html + '<tr><td>SCRIPT_URI</td><td>:</td><td>' + Application.Request.ScriptURI + '</td></tr>';
-  html := html + '<tr><td>PATH INFO</td><td>:</td><td>' + Application.Request.PathInfo + '</td></tr>';
-  html := html + '<tr><td>PATH_TRANSLATED</td><td>:</td><td>' + Application.EnvironmentVariable['PATH_TRANSLATED'] + '</td></tr>';
-  html := html + '<tr><td>REQUEST_METHOD</td><td>:</td><td>' + Application.Request.Method + '</td></tr>';
-  html := html + '<tr><td>CONTENT_TYPE</td><td>:</td><td>' + Application.Request.ContentType + '</td></tr>';
-  html := html + '<tr><td>SERVER_PROTOCOL</td><td>:</td><td>' + Application.Request.ServerProtocol + '</td></tr>';
-  html := html + '<tr><td>QUERY_STRING</td><td>:</td><td>' + Application.Request.QueryString + '</td></tr>';
-  html := html + '<tr><td>HTTP_ACCEPT_ENCODING</td><td>:</td><td>' + Application.Request.AcceptEncoding + '</td></tr>';
-  html := html + '<tr><td>HTTP_ACCEPT_LANGUAGE</td><td>:</td><td>' + Application.Request.AcceptLanguage + '</td></tr>';
-  html := html + '<tr><td>HTTP_COOKIE</td><td>:</td><td>' + Application.EnvironmentVariable['HTTP_COOKIE'] + '</td></tr>';
-  html := html + '<tr><td>Last Modified</td><td>:</td><td>' + Application.Request.LastModified + '</td></tr>';
-  //html := html + '<tr><td>&nbsp;</td><td>:</td><td>' + Application.Request.HTTPXRequestedWith + '</td></tr>';
-  //html := html + '<tr><td>HTTP_DNT</td><td>:</td><td>' + Application.Request. + '</td></tr>';
+  html := html + '<tr><td>REDIRECT_STATUS</td><td>:</td><td>' + HTMLEncode(Application.EnvironmentVariable['REDIRECT_STATUS']) + '</td></tr>';
+  html := html + '<tr><td>HTTP_ACCEPT</td><td>:</td><td>' + HTMLEncode(Application.Request.Accept) + '</td></tr>';
+  html := html + '<tr><td>HTTP_USER_AGENT</td><td>:</td><td>' + HTMLEncode(Application.Request.UserAgent) + '</td></tr>';
+  html := html + '<tr><td>HTTP_CONNECTION</td><td>:</td><td>' + HTMLEncode(Application.Request. Connection) + '</td></tr>';
+  html := html + '<tr><td>HTTP_REFERER</td><td>:</td><td>' + HTMLEncode(Application.Request.Referer) + '</td></tr>';
+  html := html + '<tr><td>SERVER_NAME</td><td>:</td><td>' + HTMLEncode(Application.EnvironmentVariable['SERVER_NAME']) + '</td></tr>';
+  html := html + '<tr><td>SERVER_ADDR</td><td>:</td><td>' + HTMLEncode(Application.EnvironmentVariable['SERVER_ADDR']) + '</td></tr>';
+  html := html + '<tr><td>REMOTE_HOST</td><td>:</td><td>' + HTMLEncode(Application.Request.RemoteHost) + '</td></tr>';
+  html := html + '<tr><td>REMOTE_ADDR</td><td>:</td><td>' + HTMLEncode(Application.Request.RemoteAddress) + '</td></tr>';
+  html := html + '<tr><td>REMOTE_PORT</td><td>:</td><td>' + HTMLEncode(Application.EnvironmentVariable['REMOTE_PORT']) + '</td></tr>';
+  html := html + '<tr><td>SCRIPT_NAME</td><td>:</td><td>' + HTMLEncode(Application.Request.ScriptName) + '</td></tr>';
+  html := html + '<tr><td>SCRIPT_FILENAME</td><td>:</td><td>' + HTMLEncode(Application.EnvironmentVariable['SCRIPT_FILENAME']) + '</td></tr>';
+  html := html + '<tr><td>SCRIPT_URI</td><td>:</td><td>' + HTMLEncode(Application.Request.ScriptURI) + '</td></tr>';
+  html := html + '<tr><td>PATH INFO</td><td>:</td><td>' + HTMLEncode(Application.Request.PathInfo) + '</td></tr>';
+  html := html + '<tr><td>PATH_TRANSLATED</td><td>:</td><td>' + HTMLEncode(Application.EnvironmentVariable['PATH_TRANSLATED']) + '</td></tr>';
+  html := html + '<tr><td>REQUEST_METHOD</td><td>:</td><td>' + HTMLEncode(Application.Request.Method) + '</td></tr>';
+  html := html + '<tr><td>CONTENT_TYPE</td><td>:</td><td>' + HTMLEncode(Application.Request.ContentType) + '</td></tr>';
+  html := html + '<tr><td>SERVER_PROTOCOL</td><td>:</td><td>' + HTMLEncode(Application.Request.ServerProtocol) + '</td></tr>';
+  html := html + '<tr><td>QUERY_STRING</td><td>:</td><td>' + HTMLEncode(Application.Request.QueryString) + '</td></tr>';
+  html := html + '<tr><td>HTTP_ACCEPT_ENCODING</td><td>:</td><td>' + HTMLEncode(Application.Request.AcceptEncoding) + '</td></tr>';
+  html := html + '<tr><td>HTTP_ACCEPT_LANGUAGE</td><td>:</td><td>' + HTMLEncode(Application.Request.AcceptLanguage) + '</td></tr>';
+  html := html + '<tr><td>HTTP_COOKIE</td><td>:</td><td>' + HTMLEncode(Application.EnvironmentVariable['HTTP_COOKIE']) + '</td></tr>';
+  html := html + '<tr><td>Last Modified</td><td>:</td><td>' + HTMLEncode(Application.Request.LastModified) + '</td></tr>';
+  //html := html + '<tr><td>&nbsp;</td><td>:</td><td>' + HTMLEncode(Application.Request.HTTPXRequestedWith) + '</td></tr>';
+  //html := html + '<tr><td>HTTP_DNT</td><td>:</td><td>' + HTMLEncode(Application.Request.) + '</td></tr>';
   for i := 0 to Application.Request.CustomHeaders.Count - 1 do
   begin
     html  := html + '<tr>';
-    html  := html + '<td>'+Application.Request.CustomHeaders.Names[i]+'</td><td>:</td><td>' + Application.Request.CustomHeaders.ValueFromIndex[i] + '</td>';
+    html  := html + '<td>'+HTMLEncode(Application.Request.CustomHeaders.Names[i])+'</td><td>:</td><td>' + HTMLEncode(Application.Request.CustomHeaders.ValueFromIndex[i]) + '</td>';
     html  := html + '</tr>';
   end;
   html  := html + '</table>';
@@ -989,7 +993,7 @@ begin
   for i := 0 to lst.Count -1 do
   begin
     html  := html + '<tr>';
-    html  := html + '<td>'+lst.Names[i]+'</td><td>:</td><td>' + lst.ValueFromIndex[i] + '</td>';
+    html  := html + '<td>'+HTMLEncode(lst.Names[i])+'</td><td>:</td><td>' + HTMLEncode(lst.ValueFromIndex[i]) + '</td>';
     html  := html + '</tr>';
   end;
   html  := html + '</table>';
@@ -1059,10 +1063,7 @@ end;
 
 function TThemeUtil.isCacheExpired: boolean;
 begin
-  if HoursBetween(FileDateToDateTime(FileAge(getCacheFileName)), now) > FCacheTime then
-    Result := True
-  else
-    Result := False;
+  Result := HoursBetween(FileDateToDateTime(FileAge(getCacheFileName)), now) >= FCacheTime;
 end;
 
 function TThemeUtil.LoadCache: string;
@@ -1096,8 +1097,7 @@ begin
   begin
     f := getCacheFileName;
     try
-      if not DirectoryExists(ExtractFileDir(f)) then
-        MkDir(ExtractFileDir(f));
+      ForceDirectories(ExtractFileDir(f));
       with TStringList.Create do
       begin
         Text := Content;
@@ -1986,18 +1986,23 @@ begin
   FHitType := htNone;
   CacheTime := AppData.cacheTime; // default: 3 hours
   // do not overwrite instances that already exist (would leak and drop
-  // callbacks registered before ThemeUtil was created)
-  if not Assigned(HTMLUtil) then
+  // callbacks registered before ThemeUtil was created); only free what
+  // this instance created
+  FOwnsHTMLUtil := not Assigned(HTMLUtil);
+  if FOwnsHTMLUtil then
     HTMLUtil := THTMLUtil.Create;
   RenderType:= rtSmarty;
-  if not Assigned(___TagCallbackMap) then
+  FOwnsTagCallbackMap := not Assigned(___TagCallbackMap);
+  if FOwnsTagCallbackMap then
     ___TagCallbackMap := TTagCallbackMap.Create;
 end;
 
 destructor TThemeUtil.Destroy;
 begin
-  FreeAndNil(___TagCallbackMap);
-  FreeAndNil(HTMLUtil);
+  if FOwnsTagCallbackMap then
+    FreeAndNil(___TagCallbackMap);
+  if FOwnsHTMLUtil then
+    FreeAndNil(HTMLUtil);
   FreeAndNil(FHits);
   FreeAndNil(FHTMLHead);
   FreeAndNil(FTagAssign_Variable);
@@ -2467,17 +2472,21 @@ begin
 
   try
     templateEngine := TFPTemplate.Create;
-    templateEngine.FileName := templateFilename;
-    templateEngine.AllowTagParams := True;
-    templateEngine.StartDelimiter := FStartDelimiter;
-    templateEngine.EndDelimiter := FEndDelimiter;
-    templateEngine.ParamValueSeparator := FParamValueSeparator;
-    if TagProcessorAddress = nil then
-      templateEngine.OnReplaceTag := @TagController
-    else
-      templateEngine.OnReplaceTag := TagProcessorAddress;
+    try
+      templateEngine.FileName := templateFilename;
+      templateEngine.AllowTagParams := True;
+      templateEngine.StartDelimiter := FStartDelimiter;
+      templateEngine.EndDelimiter := FEndDelimiter;
+      templateEngine.ParamValueSeparator := FParamValueSeparator;
+      if TagProcessorAddress = nil then
+        templateEngine.OnReplaceTag := @TagController
+      else
+        templateEngine.OnReplaceTag := TagProcessorAddress;
 
-    Result := templateEngine.GetContent;
+      Result := templateEngine.GetContent;
+    finally
+      FreeAndNil(templateEngine);
+    end;
 
     // clean tag
     if isCleanTag then
@@ -2502,12 +2511,13 @@ begin
 
   if not SubModule then
   begin
-    if FHTMLHead.JS.Count>0 then
-      Result:=StringReplace(Result,'</head>',FHTMLHead.JS.Text+'</head>',[rfReplaceAll]);
-    if FHTMLHead.CSS.Count>0 then
-      Result:=StringReplace(Result,'</head>',FHTMLHead.CSS.Text+'</head>',[rfReplaceAll]);
+    // meta first, then stylesheets, then scripts
     if FHTMLHead.Meta.Count>0 then
       Result:=StringReplace(Result,'</head>',FHTMLHead.Meta.Text+'</head>',[rfReplaceAll]);
+    if FHTMLHead.CSS.Count>0 then
+      Result:=StringReplace(Result,'</head>',FHTMLHead.CSS.Text+'</head>',[rfReplaceAll]);
+    if FHTMLHead.JS.Count>0 then
+      Result:=StringReplace(Result,'</head>',FHTMLHead.JS.Text+'</head>',[rfReplaceAll]);
     AddHit( Application.Request.URL);
   end;
   Result := AdjustLineBreaks(Result);
@@ -2516,7 +2526,9 @@ begin
   if Cache then
     SaveCache(Result);
 
-  Result := Result + '<!-- '+getDebugInfo('time')+' -->';
+  // only on the final page: not inside every [include], not in JSON data
+  if not (SubModule or FIsJSON) then
+    Result := Result + '<!-- '+getDebugInfo('time')+' -->';
 
   if FIsJSON then
   begin
@@ -2526,7 +2538,6 @@ begin
     Result := response_json.AsJSON;
     FreeAndNil( response_json);
   end;
-  FreeAndNil(templateEngine);
 end;
 
 function TThemeUtil.RenderFromContent(TagProcessorAddress: TReplaceTagEvent; const Content: string; TemplateFile: string
@@ -2601,8 +2612,19 @@ var
   skip:boolean;
   templateEngine : TFPTemplate;
 begin
+  // remove comments first, so the line they were on is dropped as well
+  templateEngine := TFPTemplate.Create;
+  templateEngine.Template := Content;
+  templateEngine.AllowTagParams := True;
+  templateEngine.StartDelimiter := '<!--';
+  templateEngine.EndDelimiter := '-->';
+  templateEngine.ParamValueSeparator := '=';
+  templateEngine.OnReplaceTag := nil;
   html := TStringList.Create;
-  html.Text:=Content;
+  html.Text := templateEngine.GetContent;
+  FreeAndNil(templateEngine);
+
+  // scanning backwards: a closing tag starts a block to keep as it is
   skip:=false;
   for i:=html.Count-1 downto 0 do
   begin
@@ -2610,25 +2632,18 @@ begin
     if Pos('<script',html[i])>0 then skip:=false;
     if Pos('</code',html[i])>0 then skip:=true;
     if Pos('<code',html[i])>0 then skip:=false;
+    if Pos('</pre',html[i])>0 then skip:=true;
+    if Pos('<pre',html[i])>0 then skip:=false;
+    if Pos('</textarea',html[i])>0 then skip:=true;
+    if Pos('<textarea',html[i])>0 then skip:=false;
     if (not skip) or ForceTrim then
     begin
       html[i]:=trim(html[i]);
+      if html[i]='' then
+        html.Delete(i);
     end;
-    if html[i]='' then
-      html.Delete(i);
   end;
-
-  // remove comment
-  templateEngine := TFPTemplate.Create;
-  templateEngine.Template := html.Text;
-  templateEngine.AllowTagParams := True;
-  templateEngine.StartDelimiter := '<!--';
-  templateEngine.EndDelimiter := '-->';
-  templateEngine.ParamValueSeparator := '=';
-  templateEngine.OnReplaceTag := nil;
-  Result := templateEngine.GetContent;
-  FreeAndNil(templateEngine);
-
+  Result := html.Text;
   FreeAndNil(html);
 end;
 

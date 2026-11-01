@@ -10,7 +10,8 @@ unit test_theme_controller;
 interface
 
 uses
-  theme_controller, common, fpjson, Classes, SysUtils, fpcunit, testregistry;
+  theme_controller, common, html_lib, fpjson, DateUtils, Classes, SysUtils,
+  fpcunit, testregistry;
 
 type
 
@@ -43,6 +44,12 @@ type
     procedure TestNl2brLineFeeds;
     procedure TestEmptyPipeFilter;
     procedure TestSafeTemplateName;
+    procedure TestEscapeFilter;
+    procedure TestDateFilterLocalTime;
+    procedure TestTrimWhiteSpaceKeepsPreAndTextarea;
+    procedure TestCacheTimeStoredAsGiven;
+    procedure TestSharedObjectsNotFreedWhenNotOwned;
+    procedure TestInstancesKeepTheirOwnVariables;
   end;
 
 implementation
@@ -281,6 +288,87 @@ begin
   AssertEquals('', TThemeUtil.SafeTemplateName('C:x'));
   AssertEquals('', TThemeUtil.SafeTemplateName(''));
   AssertEquals('page', TThemeUtil.SafeTemplateName('page'#0'../x'));
+end;
+
+procedure TThemeControllerTest.TestEscapeFilter;
+begin
+  ThemeUtil.Assign('x', '<b>&"''');
+  AssertEquals('&lt;b&gt;&amp;&quot;&#39;', Render('[x filter=escape]'));
+  AssertEquals('&lt;b&gt;&amp;&quot;&#39;', Render('[x filter=html]'));
+  AssertEquals('&lt;b&gt;&amp;&quot;&#39;', Render('[x filter=htmlspecialchars]'));
+  AssertEquals('&lt;b&gt;&amp;&quot;&#39;', Render('[x|escape]'));
+  // without a filter the value is printed as is
+  AssertEquals('<b>&"''', Render('[x]'));
+end;
+
+procedure TThemeControllerTest.TestDateFilterLocalTime;
+var
+  d: TDateTime;
+begin
+  d := EncodeDateTime(2026, 11, 1, 23, 30, 0, 0);
+  ThemeUtil.Assign('ts', IntToStr(DateTimeToUnix(d, False)));
+  // "date" and "unix2date" must agree on the time zone (local)
+  AssertEquals(FormatDateTime('dd MMM yyyy', d), Render('[ts filter=date]'));
+  AssertEquals('2026-11-01 23:30', Render('[ts filter=unix2date format=yyyy-mm-dd_hh:nn]').Replace('_', ' '));
+end;
+
+procedure TThemeControllerTest.TestTrimWhiteSpaceKeepsPreAndTextarea;
+var
+  r: string;
+begin
+  r := ThemeUtil.DoTrimWhiteSpace('<div>'#10'   a  '#10#10'</div>'#10'<pre>'#10'  keep'#10#10'  this'#10'</pre>'
+    + #10'<textarea>'#10'  t'#10#10'</textarea>'#10'<!-- gone -->'#10'end');
+  r := StringReplace(r, #13#10, #10, [rfReplaceAll]);
+  AssertEquals('<div>'#10'a'#10'</div>'#10'<pre>'#10'  keep'#10#10'  this'#10'</pre>'
+    + #10'<textarea>'#10'  t'#10#10'</textarea>'#10'end'#10, r);
+end;
+
+procedure TThemeControllerTest.TestCacheTimeStoredAsGiven;
+begin
+  ThemeUtil.CacheTime := 5;
+  AssertEquals(5, ThemeUtil.CacheTime);
+  ThemeUtil.CacheTime := 5;
+  AssertEquals(5, ThemeUtil.CacheTime);
+end;
+
+procedure TThemeControllerTest.TestSharedObjectsNotFreedWhenNotOwned;
+var
+  map: TTagCallbackMap;
+  util: THTMLUtil;
+begin
+  FreeAndNil(ThemeUtil); // owned the map and HTMLUtil created in SetUp
+  AssertNull('owned map is freed', ___TagCallbackMap);
+  AssertNull('owned HTMLUtil is freed', HTMLUtil);
+  map := TTagCallbackMap.Create;
+  util := THTMLUtil.Create;
+  ___TagCallbackMap := map;
+  HTMLUtil := util;
+  ThemeUtil := TThemeUtil.Create;
+  FreeAndNil(ThemeUtil);
+  AssertTrue('external map survives', ___TagCallbackMap = map);
+  AssertTrue('external HTMLUtil survives', HTMLUtil = util);
+  FreeAndNil(___TagCallbackMap);
+  FreeAndNil(HTMLUtil);
+  ThemeUtil := TThemeUtil.Create; // for TearDown
+end;
+
+procedure TThemeControllerTest.TestInstancesKeepTheirOwnVariables;
+var
+  other: TThemeUtil;
+begin
+  ThemeUtil.Assign('a', '1');
+  other := TThemeUtil.Create;
+  try
+    other.Assign('a', '2');
+    AssertEquals('1', ThemeUtil.VarValue['a']);
+    AssertEquals('2', other.VarValue['a']);
+    AssertEquals('t', Render('[if a = 1]t[else]f[/if]'));
+  finally
+    other.Free;
+  end;
+  // freeing the second instance must not pull the first one's state away
+  AssertEquals('1', ThemeUtil.VarValue['a']);
+  AssertEquals('t', Render('[if a = 1]t[else]f[/if]'));
 end;
 
 initialization
