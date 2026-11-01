@@ -91,8 +91,10 @@ resourcestring
   rsDBExplorer = 'DB Explorer';
   rsViewDBConnector = 'View DB Connector';
   rsConfirmation = 'Confirmation';
-  rsAskRunDangerOperation = 'Run this dangerous query (drop/delete)?';
-  rsAskDeleteConnection = 'Delete the connection "%s"?';
+  // deliberately inverted: the default button (Yes/Enter) cancels, so an
+  // accidental Enter never drops data or removes a connection
+  rsAskCancelDangerOperation = 'I will cancel this danger operation (drop/delete)?';
+  rsAskCancelOperation = 'I will cancel this operation (delete connection "%s")?';
 
   // json tools
   rsJsonSEmpty   = 'Empty document';

@@ -924,8 +924,9 @@ begin
   i := tvConnectionList.Selected.Index;
   dbName := getConfigValue(i, 'name');
 
-  if MessageDlg(rsConfirmation, Format(rsAskDeleteConnection, [dbName]),
-    mtConfirmation, [mbYes, mbNo], 0) <> mrYes then
+  // Yes (the default) cancels, see rsAskCancelOperation
+  if MessageDlg(rsConfirmation, Format(rsAskCancelOperation, [dbName]),
+    mtConfirmation, [mbYes, mbNo], 0) = mrYes then
     Exit;
 
   if not loadDatabaseConfig then

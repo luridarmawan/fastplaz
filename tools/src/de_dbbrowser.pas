@@ -250,8 +250,9 @@ begin
 
   if preg_match(QUERY_DELETE_REGEX, sql.Trim) then
   begin
-    if MessageDlg(rsConfirmation, rsAskRunDangerOperation,
-      mtConfirmation, [mbYes, mbNo], 0) <> mrYes then
+    // Yes (the default) cancels, see rsAskCancelDangerOperation
+    if MessageDlg(rsConfirmation, rsAskCancelDangerOperation,
+      mtConfirmation, [mbYes, mbNo], 0) = mrYes then
       Exit;
   end;
 
