@@ -58,6 +58,26 @@ type
     procedure TestQueryExecAndRowsAffected;
     procedure TestQueryOpenToJson;
     procedure TestValueOnClosedDataset;
+    procedure TestExecScriptRunsEveryStatement;
+    procedure TestExecScriptWithTrigger;
+    procedure TestExecScriptFailureRollsBack;
+    procedure TestQueryExecScript;
+  end;
+
+  { TSplitSQLStatementsTest: no database needed }
+
+  TSplitSQLStatementsTest = class(TTestCase)
+  published
+    procedure TestEmptyAndBlank;
+    procedure TestSimpleStatements;
+    procedure TestSemicolonInsideQuotes;
+    procedure TestComments;
+    procedure TestMySQLHintKept;
+    procedure TestDollarQuotedBody;
+    procedure TestTriggerBody;
+    procedure TestTriggerWithCase;
+    procedure TestPostgresTriggerWithoutBody;
+    procedure TestBeginTransactionIsAStatement;
   end;
 
 implementation
@@ -473,7 +493,145 @@ begin
   AssertTrue(FModel.EOF);
 end;
 
+procedure TSimpleModelSQLiteTest.TestExecScriptRunsEveryStatement;
+begin
+  AssertTrue(FModel.Message, FModel.ExecScript(
+    '-- two inserts and an update' + LineEnding +
+    'INSERT INTO persons (name, age, city) VALUES (''A;B'', 1, ''X'');' + LineEnding +
+    'INSERT INTO persons (name, age, city) VALUES (''C'', 2, ''X'');' + LineEnding +
+    'UPDATE persons SET age = 9 WHERE city = ''X'';'));
+  AssertEquals('', FModel.Message);
+  AssertEquals(5, CountRows);
+  AssertTrue(FModel.Find(['name=''A;B''']));
+  AssertEquals(9, Integer(FModel['age']));
+end;
+
+procedure TSimpleModelSQLiteTest.TestExecScriptWithTrigger;
+begin
+  AssertTrue(FModel.Message, FModel.ExecScript(
+    'CREATE TABLE audit (person_id INTEGER, note TEXT);' + LineEnding +
+    'CREATE TRIGGER persons_ai AFTER INSERT ON persons' + LineEnding +
+    'BEGIN' + LineEnding +
+    '  INSERT INTO audit VALUES (NEW.id, ''added'');' + LineEnding +
+    '  UPDATE persons SET city = CASE WHEN NEW.city IS NULL THEN ''-'' ELSE NEW.city END' + LineEnding +
+    '    WHERE id = NEW.id;' + LineEnding +
+    'END;' + LineEnding +
+    'INSERT INTO persons (name, age) VALUES (''D'', 5);'));
+  AssertTrue(FModel.Find(['name=''D''']));
+  AssertEquals('-', string(FModel['city']));
+  AssertTrue(QueryExec('DELETE FROM audit WHERE note = ''added'''));
+  AssertEquals(1, QueryExecRowAffected);
+end;
+
+procedure TSimpleModelSQLiteTest.TestExecScriptFailureRollsBack;
+begin
+  AssertFalse(FModel.ExecScript(
+    'INSERT INTO persons (name) VALUES (''E'');' +
+    'INSERT INTO no_such_table VALUES (1);' +
+    'INSERT INTO persons (name) VALUES (''F'');'));
+  AssertTrue(FModel.Message, Pos('statement 2:', FModel.Message) = 1);
+  AssertEquals(3, CountRows);
+  // the connection stays usable
+  AssertTrue(FModel.Message, FModel.ExecScript('INSERT INTO persons (name) VALUES (''G'')'));
+  AssertEquals(4, CountRows);
+end;
+
+procedure TSimpleModelSQLiteTest.TestQueryExecScript;
+begin
+  AssertTrue(QueryExecScript('DELETE FROM persons WHERE id = 1; DELETE FROM persons WHERE id = 2'));
+  AssertEquals(1, CountRows);
+  AssertFalse(QueryExecScript('DELETE FROM persons; SELECT * FROM no_such_table'));
+  AssertEquals(1, CountRows);
+end;
+
+{ TSplitSQLStatementsTest }
+
+procedure AssertStatements(const AExpected: array of string; const AActual: TStringArray);
+var
+  i: integer;
+begin
+  TAssert.AssertEquals('statement count', Length(AExpected), Length(AActual));
+  for i := 0 to High(AExpected) do
+    TAssert.AssertEquals('statement ' + IntToStr(i + 1), AExpected[i], AActual[i]);
+end;
+
+procedure TSplitSQLStatementsTest.TestEmptyAndBlank;
+begin
+  AssertEquals(0, Length(SplitSQLStatements('')));
+  AssertEquals(0, Length(SplitSQLStatements(' ; ;' + LineEnding + ';')));
+  AssertEquals(0, Length(SplitSQLStatements('-- only a comment' + LineEnding + '/* and another */;')));
+end;
+
+procedure TSplitSQLStatementsTest.TestSimpleStatements;
+begin
+  AssertStatements(['SELECT 1', 'SELECT 2', 'SELECT 3'],
+    SplitSQLStatements('SELECT 1; SELECT 2;' + LineEnding + 'SELECT 3'));
+end;
+
+procedure TSplitSQLStatementsTest.TestSemicolonInsideQuotes;
+begin
+  AssertStatements([
+    'INSERT INTO t VALUES (''a;b'', ''it''''s;'')',
+    'SELECT "x;y" FROM `t;1`'],
+    SplitSQLStatements(
+      'INSERT INTO t VALUES (''a;b'', ''it''''s;'');SELECT "x;y" FROM `t;1`;'));
+end;
+
+procedure TSplitSQLStatementsTest.TestComments;
+begin
+  // a dropped comment leaves one space behind
+  AssertStatements(['SELECT 1', 'SELECT   2','SELECT ''--not a comment'''],
+    SplitSQLStatements(
+      '-- first; still comment' + LineEnding +
+      'SELECT 1; /* a; b */' + LineEnding +
+      'SELECT /* inline; */ 2;' + LineEnding +
+      'SELECT ''--not a comment'';'));
+end;
+
+procedure TSplitSQLStatementsTest.TestMySQLHintKept;
+begin
+  AssertStatements(['/*!40101 SET NAMES utf8 */', 'SELECT 1'],
+    SplitSQLStatements('/*!40101 SET NAMES utf8 */; SELECT 1;'));
+end;
+
+procedure TSplitSQLStatementsTest.TestDollarQuotedBody;
+const
+  FN = 'CREATE FUNCTION f() RETURNS int AS $body$ BEGIN RETURN 1; END; $body$ LANGUAGE plpgsql';
+begin
+  AssertStatements([FN, 'SELECT $$a;b$$', 'SELECT $1'],
+    SplitSQLStatements(FN + '; SELECT $$a;b$$; SELECT $1;'));
+end;
+
+procedure TSplitSQLStatementsTest.TestTriggerBody;
+const
+  TRG = 'CREATE TRIGGER t1 AFTER INSERT ON a BEGIN INSERT INTO b VALUES (1); DELETE FROM c; END';
+begin
+  AssertStatements(['CREATE TABLE a (x)', TRG, 'SELECT 1'],
+    SplitSQLStatements('CREATE TABLE a (x); ' + TRG + '; SELECT 1;'));
+end;
+
+procedure TSplitSQLStatementsTest.TestTriggerWithCase;
+const
+  TRG = 'create trigger t2 after update on a begin update a set x = case when 1 then 2 end; end';
+begin
+  AssertStatements([TRG, 'SELECT 1'], SplitSQLStatements(TRG + ';SELECT 1'));
+end;
+
+procedure TSplitSQLStatementsTest.TestPostgresTriggerWithoutBody;
+const
+  TRG = 'CREATE TRIGGER t3 BEFORE UPDATE ON a FOR EACH ROW EXECUTE FUNCTION f()';
+begin
+  AssertStatements([TRG, 'SELECT 1'], SplitSQLStatements(TRG + '; SELECT 1;'));
+end;
+
+procedure TSplitSQLStatementsTest.TestBeginTransactionIsAStatement;
+begin
+  AssertStatements(['BEGIN', 'INSERT INTO a VALUES (1)', 'COMMIT'],
+    SplitSQLStatements('BEGIN; INSERT INTO a VALUES (1); COMMIT;'));
+end;
+
 initialization
   RegisterTest(TSimpleModelSQLiteTest);
+  RegisterTest(TSplitSQLStatementsTest);
 
 end.

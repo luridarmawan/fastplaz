@@ -119,6 +119,9 @@ type
     // backslashes doubled as well when the connector is MySQL
     function QuoteValue(const AValue: string): string;
     function Exec( ASQL:String): boolean;
+    // Runs a script of several ';'-separated statements on the write
+    // connection in one transaction; see SplitSQLStatements.
+    function ExecScript( const ASQL: string): boolean;
 
     function All(const AUniDirectional: boolean = false):boolean;
     function GetAll( Limit: Integer = 0; Offset: Integer = 0; const AUniDirectional: boolean = false):boolean;
@@ -182,6 +185,20 @@ function  QueryOpenToJson( SQL: string; var ResultJSON: TJSONObject; NoFieldName
 function  QueryOpenToJson( SQL: string; var ResultArray: TJSONArray; NoFieldName : boolean = True): boolean;
 function  QueryExecToJson( SQL: string; var ResultJSON: TJSONObject): boolean;
 function  QueryExec( SQL: string):boolean;
+
+// Splits a SQL script into statements on ';'. Quoted text ('..', "..",
+// `..`, $tag$..$tag$) is kept as is, -- and /* */ comments are dropped
+// (MySQL /*! ... */ hints are kept), and the ';' inside the BEGIN..END
+// body of a CREATE TRIGGER does not end the statement. Client commands
+// such as DELIMITER are not supported.
+function  SplitSQLStatements( const ASQL: string): TStringArray;
+// Runs every statement of ASQL with ExecuteDirect (SQLite and MySQL accept
+// only one statement per call) and commits once. On the first failure the
+// transaction is rolled back, AErrorMessage is set and Result is False.
+function  ExecSQLScript( AConnector: TSQLConnector; const ASQL: string; out AErrorMessage: string): boolean;
+// ExecSQLScript on the configured write connection
+function  QueryExecScript( SQL: string): boolean;
+
 function  DataToJSON( Data : TSQLQuery; var ResultJSON: TJSONArray; NoFieldName : boolean = True):boolean;
 
 var
@@ -603,6 +620,241 @@ begin
   {$ifdef debug}
   {$endif}
   FreeAndNil(q);
+end;
+
+function IsSQLIdentChar(const C: char): boolean;
+begin
+  Result := C in ['A'..'Z', 'a'..'z', '0'..'9', '_'];
+end;
+
+// ABare is the statement so far with quoted text and comments blanked out.
+// True while a CREATE statement (trigger, procedure) is inside BEGIN..END,
+// so a ';' there belongs to the body. CASE..END is counted as well, and
+// MySQL "END IF/LOOP/WHILE/REPEAT" closes a block that was never opened.
+function IsInsideSQLBlock(const ABare: string): boolean;
+var
+  i, n, start, depth: integer;
+  w, prev: string;
+  first: boolean;
+begin
+  Result := False;
+  depth := 0;
+  first := True;
+  prev := '';
+  i := 1;
+  n := Length(ABare);
+  while i <= n do
+  begin
+    if not IsSQLIdentChar(ABare[i]) then
+    begin
+      Inc(i);
+      Continue;
+    end;
+    start := i;
+    while (i <= n) and IsSQLIdentChar(ABare[i]) do
+      Inc(i);
+    w := UpperCase(Copy(ABare, start, i - start));
+    if first then
+    begin
+      if w <> 'CREATE' then
+        Exit;
+      first := False;
+    end;
+    if w = 'BEGIN' then
+      Inc(depth)
+    else if w = 'CASE' then
+    begin
+      if prev <> 'END' then
+        Inc(depth);
+    end
+    else if w = 'END' then
+      Dec(depth)
+    else if (prev = 'END') and ((w = 'IF') or (w = 'LOOP') or (w = 'WHILE')
+      or (w = 'REPEAT')) then
+      Inc(depth);
+    prev := w;
+  end;
+  Result := depth > 0;
+end;
+
+function SplitSQLStatements(const ASQL: string): TStringArray;
+var
+  i, j, k, n, count: integer;
+  c: char;
+  cur, bare, tag: string;
+
+  procedure AddStatement;
+  var
+    s: string;
+  begin
+    s := Trim(cur);
+    cur := '';
+    bare := '';
+    if s = '' then
+      Exit;
+    if count = Length(Result) then
+      SetLength(Result, count * 2 + 4);
+    Result[count] := s;
+    Inc(count);
+  end;
+
+begin
+  Result := nil;
+  count := 0;
+  cur := '';
+  bare := '';
+  n := Length(ASQL);
+  i := 1;
+  while i <= n do
+  begin
+    c := ASQL[i];
+
+    // '..', "..", `..`: a doubled quote stays inside the literal
+    if c in ['''', '"', '`'] then
+    begin
+      j := i + 1;
+      while j <= n do
+      begin
+        if ASQL[j] = c then
+        begin
+          if (j < n) and (ASQL[j + 1] = c) then
+            Inc(j, 2)
+          else
+            Break;
+        end
+        else
+          Inc(j);
+      end;
+      if j > n then
+        j := n;
+      cur := cur + Copy(ASQL, i, j - i + 1);
+      bare := bare + ' ';
+      i := j + 1;
+      Continue;
+    end;
+
+    // -- line comment
+    if (c = '-') and (i < n) and (ASQL[i + 1] = '-') then
+    begin
+      while (i <= n) and not (ASQL[i] in [#10, #13]) do
+        Inc(i);
+      cur := cur + ' ';
+      bare := bare + ' ';
+      Continue;
+    end;
+
+    // /* block comment */, MySQL /*! hint */ is kept
+    if (c = '/') and (i < n) and (ASQL[i + 1] = '*') then
+    begin
+      j := Pos('*/', ASQL, i + 2);
+      if j = 0 then
+        j := n
+      else
+        j := j + 1;
+      if (i + 2 <= n) and (ASQL[i + 2] = '!') then
+        cur := cur + Copy(ASQL, i, j - i + 1)
+      else
+        cur := cur + ' ';
+      bare := bare + ' ';
+      i := j + 1;
+      Continue;
+    end;
+
+    // PostgreSQL $$..$$ / $tag$..$tag$ body
+    if (c = '$') and not ((i > 1) and IsSQLIdentChar(ASQL[i - 1])) then
+    begin
+      j := i + 1;
+      while (j <= n) and IsSQLIdentChar(ASQL[j]) do
+        Inc(j);
+      if (j <= n) and (ASQL[j] = '$')
+        and not ((j > i + 1) and (ASQL[i + 1] in ['0'..'9'])) then
+      begin
+        tag := Copy(ASQL, i, j - i + 1);
+        k := Pos(tag, ASQL, j + 1);
+        if k = 0 then
+          k := n
+        else
+          k := k + Length(tag) - 1;
+        cur := cur + Copy(ASQL, i, k - i + 1);
+        bare := bare + ' ';
+        i := k + 1;
+        Continue;
+      end;
+    end;
+
+    if (c = ';') and not IsInsideSQLBlock(bare) then
+    begin
+      AddStatement;
+      Inc(i);
+      Continue;
+    end;
+
+    cur := cur + c;
+    bare := bare + c;
+    Inc(i);
+  end;
+  AddStatement;
+  SetLength(Result, count);
+end;
+
+function ExecSQLScript(AConnector: TSQLConnector; const ASQL: string;
+  out AErrorMessage: string): boolean;
+var
+  statements: TStringArray;
+  i: integer;
+begin
+  Result := False;
+  AErrorMessage := '';
+  if AConnector = nil then
+  begin
+    AErrorMessage := 'no database connection';
+    Exit;
+  end;
+  statements := SplitSQLStatements(ASQL);
+  i := 0;
+  try
+    while i <= High(statements) do
+    begin
+      AConnector.ExecuteDirect(statements[i]);
+      Inc(i);
+    end;
+    if Assigned(AConnector.Transaction) and AConnector.Transaction.Active then
+      AConnector.Transaction.Commit;
+    Result := True;
+  except
+    on E: Exception do
+    begin
+      AErrorMessage := Format('statement %d: %s', [i + 1, E.Message]);
+      try
+        if Assigned(AConnector.Transaction) and AConnector.Transaction.Active then
+          AConnector.Transaction.Rollback;
+      except
+      end;
+    end;
+  end;
+end;
+
+// the connector QueryExec and Save use for writes, nil when the second
+// connection cannot be opened
+function WriteConnector(ADefault: TSQLConnector): TSQLConnector;
+begin
+  if AppData.databaseRead = AppData.databaseWrite then
+    Result := ADefault
+  else
+  begin
+    Result := DatabaseSecond_Prepare(AppData.databaseWrite, 'write');
+    if Result = nil then
+      DisplayError(format(_ERR_DATABASE_CANNOT_CONNECT, [AppData.databaseWrite]));
+  end;
+end;
+
+function QueryExecScript(SQL: string): boolean;
+var
+  msg: string;
+begin
+  Result := ExecSQLScript(WriteConnector(DB_Connector), SQL, msg);
+  if (not Result) and AppData.debug then
+    LogUtil.Add(msg, 'DB');
 end;
 
 function DataToJSON(Data: TSQLQuery; var ResultJSON: TJSONArray;
@@ -1067,6 +1319,14 @@ end;
 function TSimpleModel.Exec(ASQL: String): boolean;
 begin
   Result := QueryExec( ASQL);
+end;
+
+function TSimpleModel.ExecScript(const ASQL: string): boolean;
+var
+  msg: string;
+begin
+  Result := ExecSQLScript(WriteConnector(FConnector), ASQL, msg);
+  AMessage := msg;
 end;
 
 function TSimpleModel.All(const AUniDirectional: boolean): boolean;
