@@ -14,8 +14,8 @@ set "INSTANTFPCOPTIONS=-B -Fu.. -Fu..\..\..\FastPlaz\src\library -Fu..\..\..\Fas
 
 echo Compiling (instantfpc)...
 if "%~1"=="" (
-  instantfpc regex_tester_test.lpr -a
+  instantfpc tools_test.lpr -a
 ) else (
-  instantfpc regex_tester_test.lpr %*
+  instantfpc tools_test.lpr %*
 )
 exit /b %errorlevel%
