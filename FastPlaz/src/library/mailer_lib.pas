@@ -43,6 +43,7 @@ type
     FTo, FCc, FBcc: TStringList;
     FEmailFormat: string;
     FLogs: string;
+    FHeloName: string;
     FSSL, FTLS: boolean;
     function getEmailFormat: string;
     function getMailServer: string;
@@ -76,6 +77,8 @@ type
     property TLS: boolean read getTLS write setTLS;
     property ErrorMessage: string read FErrorMessage;
     property Logs: string read FLogs;
+    // host name announced in EHLO by the built-in client (default localhost)
+    property HeloName: string read FHeloName write FHeloName;
     property Recipients: TStringList read FTo;
     property CcList: TStringList read FCc;
     property BccList: TStringList read FBcc;
@@ -296,6 +299,8 @@ begin
     client.Port := portNo;
     client.UserName := FMailUserName;
     client.Password := FMailPassword;
+    if Trim(FHeloName) <> '' then
+      client.HeloName := Trim(FHeloName);
     if FSSL then
       client.Security := ssSSL
     else if FTLS then
@@ -336,6 +341,7 @@ begin
   FEmailFormat := 'html';
   FLogs := '';
   FErrorMessage := '';
+  FHeloName := '';
 
   // read from config.json
   MailServer := Config[UTF8Decode(format(_MAIL_MAILSERVER, [Setting]))];
