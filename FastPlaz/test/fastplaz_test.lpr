@@ -7,7 +7,7 @@ uses
   test_json_lib, test_config_lib, test_common, test_math_lib,
   test_http_lib, test_mailer_lib, test_logutil_lib, test_smtp_lib,
   test_stemmingnazief_lib, test_html_lib, test_recaptcha_lib, test_rss_lib,
-  test_solr_lib;
+  test_solr_lib, test_serialize_lib;
 
 type
 
