@@ -1,12 +1,12 @@
 
 ## INTEGRATION
 
-note: sebagian fitur integrasi sudah _deprecated_.
+note: sebagian fitur integrasi sudah _deprecated_. Unit untuk layanan yang sudah berhenti (bmkg, clarifai, googleanalytics, kloudlesscalendar, newrelic, office365, yandextranslate, zomato) masih bisa dikompilasi, tetapi ditandai `deprecated` dan akan dihapus. Lihat [docs/UPGRADE.md](docs/UPGRADE.md).
 
 - BMKG - Badan Meteorologi Klimatologi Dan Geofisika (discontinued)
 - Terjemahan Al Quran
 - Pajak Kendaraan
-- Office 365
+- Office 365 (discontinued)
 - Mata Uang
 - Resi Paket/Kurir
 

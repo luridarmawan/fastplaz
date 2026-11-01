@@ -71,6 +71,10 @@ Beberapa utilitas pendukung untuk pengembangan aplikasi juga telah disediakan.
 
 
 
+## Upgrade
+
+Rilis November 2026 memuat perbaikan yang dapat mengubah perilaku aplikasi yang sudah ada (session timeout dalam menit, `Redirect`/`die` tidak keluar dari method, `Save`/`Delete` mengembalikan False, flash message di-encode). Baca [docs/UPGRADE.md](docs/UPGRADE.md) dan [docs/Changes.md](docs/Changes.md) sebelum upgrade. Cara menjalankan unit test ada di [UNIT_TEST.md](UNIT_TEST.md).
+
 ## Related Content
 
 * [FastPlaz Official](https://fastplaz.com)
