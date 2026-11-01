@@ -85,12 +85,17 @@ type
     contentResult: String;
     FOnExecuteHandler: TExecuteHandlerEvent;
     FOnShowStatus: TShowStatusEvent;
+    FSynchronizeStatus: boolean;
     procedure syncUpdate;
   protected
     procedure Execute; override;
   public
     property OnExecuteHandler: TExecuteHandlerEvent read FOnExecuteHandler write FOnExecuteHandler;
     property OnShowStatus: TShowStatusEvent read FOnShowStatus write FOnShowStatus;
+    // True: OnShowStatus runs on the main thread through Synchronize, which
+    // needs CheckSynchronize there (GUI applications). False: it runs on
+    // this thread.
+    property SynchronizeStatus: boolean read FSynchronizeStatus write FSynchronizeStatus;
   end;
 
   { TTelegramSimpleSendThread }
@@ -150,6 +155,7 @@ type
     FGetUpdatesContent: string;
     FCallbackParsed: boolean;
     FIsCallbackQuery: boolean;
+    FUpdatesSynchronize: boolean;
     function sendMediaFile(const ACommand, AFieldName, AChatID, AFilePath,
       ACaption, AReplyToMessageID, AThreadId: string): boolean;
     function getCallbackData: TStrings;
@@ -351,6 +357,9 @@ type
 
     property WebHook: string write SetWebHook;
     property GetUpdatesContent: string read FGetUpdatesContent;
+    // getUpdatesDynamic: deliver OnMessage on the main thread (needs
+    // CheckSynchronize there); default False, delivered on the worker thread
+    property UpdatesSynchronize: boolean read FUpdatesSynchronize write FUpdatesSynchronize;
 
     // parsed on first use for the current RequestContent
     property CallbackInstance: string read getCallbackInstance;
@@ -414,7 +423,12 @@ begin
   begin
     FOnExecuteHandler();
   end;
-  Synchronize(@syncUpdate);
+  // Synchronize never returns without CheckSynchronize on the main thread
+  // (a CGI or daemon has none), which left GetUpdatesInProcess stuck
+  if FSynchronizeStatus then
+    Synchronize(@syncUpdate)
+  else
+    syncUpdate;
 end;
 
 
@@ -1215,6 +1229,7 @@ begin
   with TTelegramSimpleThread.Create(True) do
   begin
     FreeOnTerminate := True;
+    SynchronizeStatus := FUpdatesSynchronize;
     OnExecuteHandler := @onGetUpdatesExecuteHandler;
     OnShowStatus := @onGetUpdatesHandler;
     Start;

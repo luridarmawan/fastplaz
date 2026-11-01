@@ -1,5 +1,8 @@
 unit kloudlesscalendar_integration;
 
+{ DEPRECATED: Kloudless service shut down. The unit stays for existing callers; every request to the
+  old endpoint fails. }
+
 {
   The Universal API Platform
   Simplify your integration strategy
@@ -68,7 +71,7 @@ type
       AStartTime: TDateTime; AEndTime: TDateTime): string;
     function EventCreate(AAccountID, ACalendarID: string; AEventName: string;
       AStartTime: TimestampISO8601 = ''; AEndTime: TimestampISO8601 = ''): string;
-  end;
+  end deprecated 'Kloudless service shut down';
 
 
 implementation

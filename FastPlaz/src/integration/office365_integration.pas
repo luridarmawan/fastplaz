@@ -1,5 +1,8 @@
 unit office365_integration;
 
+{ DEPRECATED: Office 365 connectors retired. The unit stays for existing callers; every request to the
+  old endpoint fails. }
+
 {
   // REF:
   https://dev.outlook.com/Connectors/GetStarted
@@ -53,7 +56,7 @@ type
     property Text: string read FText write FText;
     property ThemeColor: string read FThemeColor write FThemeColor;
     property IsSuccessfull: boolean read FIsSuccessfull;
-  end;
+  end deprecated 'Office 365 connectors retired';
 
 implementation
 

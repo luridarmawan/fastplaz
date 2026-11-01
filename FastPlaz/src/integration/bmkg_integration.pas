@@ -1,4 +1,7 @@
 unit bmkg_integration;
+
+{ DEPRECATED: old BMKG data endpoints no longer exist. The unit stays for existing callers; every request to the
+  old endpoint fails. }
 {
 
   DEPRECATED:
@@ -46,7 +49,7 @@ type
 
     function SimpleInfo: string;
     function InfoGempaXML: string;
-  end;
+  end deprecated 'old BMKG data endpoints no longer exist';
 
 
 implementation
