@@ -21,7 +21,7 @@ type
     procedure TestSanitizeHeader;
     procedure TestAddToCcBccGoToSeparateLists;
     procedure TestClearResetsLists;
-    procedure TestSendWithoutSupportReportsError;
+    procedure TestSendWithoutServerReportsError;
     procedure TestCreateAndFree;
   end;
 
@@ -104,19 +104,24 @@ begin
   end;
 end;
 
-procedure TMailerLibTest.TestSendWithoutSupportReportsError;
+procedure TMailerLibTest.TestSendWithoutServerReportsError;
 var
   m: TMailer;
 begin
   {$IFDEF XMAILER}
   Ignore('xmailer is compiled in; Send would contact an SMTP server');
   {$ELSE}
+  // built-in smtp_lib path: nothing listens on 127.0.0.1:1
   m := TMailer.Create;
   try
+    m.MailServer := '127.0.0.1';
+    m.Port := '1';
+    m.SSL := False;
+    m.TLS := False;
     m.AddTo('to@x.y');
     AssertFalse(m.Send);
-    AssertEquals(_MAIL_NOSUPPORT, m.ErrorMessage);
-    AssertTrue(Pos(_MAIL_NOSUPPORT, m.Logs) > 0);
+    AssertTrue(m.ErrorMessage, Pos('connect failed', m.ErrorMessage) = 1);
+    AssertTrue(Pos('connecting to 127.0.0.1:1', m.Logs) > 0);
   finally
     m.Free;
   end;
