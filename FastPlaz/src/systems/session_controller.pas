@@ -24,10 +24,10 @@ const
   _SESSION_TIMEOUT_DEFAULT = 3 * 1440; // in minutes (default: 3 days)
   _SESSION_STORAGE_FILE = 1;
   _SESSION_STORAGE_DATABASE = 2;
-  // default session directory, relative to the application directory.
-  // %TEMP% was used before: on a shared host every FastPlaz application
-  // (same cookie "_", path "/") ended up reading each other's session files.
+  // session files live in "<TEMP>/sessions" (TEMP may point to a custom
+  // directory); this is the fallback when TEMP is not set or not writable
   _SESSION_DIR_DEFAULT = 'ztemp' + PathDelim + 'sessions';
+  _SESSION_DIR_SUBDIR = 'sessions';
   TDateTimeEpsilon = 2.2204460493e-16;
 
   // every value is bound as a parameter; nothing from the request is ever
@@ -73,6 +73,7 @@ type
     function CreateIniFile(const FileName: string): TMemIniFile;
     procedure DeleteIniFile;
     function PrepareSessionDir(const ADir: string): boolean;
+    function DefaultSessionDir: string;
     function GetInterval: double;
     function GetIsExpired: boolean;
     function GetTimeOut: integer;
@@ -251,6 +252,17 @@ begin
     Result := DirectoryIsWritable(ADir);
   except
   end;
+end;
+
+// "%TEMP%/sessions", or ztemp/sessions when TEMP is not set
+function TSessionController.DefaultSessionDir: string;
+begin
+  Result := Application.EnvironmentVariable['TEMP'];
+  if Result = '' then
+    Result := _SESSION_DIR_DEFAULT
+  else
+    Result := IncludeTrailingPathDelimiter(Result) + _SESSION_DIR_SUBDIR;
+  Result := IncludeTrailingPathDelimiter(Result);
 end;
 
 function TSessionController.GetInterval: double;
@@ -504,7 +516,7 @@ begin
   FSessionSuffix := '';
   FForceUniqueID := '';
   FSessionID := GenerateSessionID();
-  FSessionDir := IncludeTrailingPathDelimiter(_SESSION_DIR_DEFAULT);
+  FSessionDir := DefaultSessionDir;
   FSessionExtension := '.ses';
   FSessionStarted := False;
   FSessionTerminated := False;
@@ -625,7 +637,7 @@ begin
   Result := False;
 
   if FSessionDir = '' then
-    FSessionDir := _SESSION_DIR_DEFAULT;
+    FSessionDir := DefaultSessionDir;
   FSessionDir := IncludeTrailingPathDelimiter(FSessionDir);
   if not PrepareSessionDir(FSessionDir) then
   begin

@@ -29,6 +29,7 @@ type
     procedure SetUp; override;
     procedure TearDown; override;
   published
+    procedure TestDefaultSessionDirFromTemp;
     procedure TestEncodeDecodeValue;
     procedure TestNewCookieIsRandom;
     procedure TestCookieReused;
@@ -146,6 +147,39 @@ begin
   RemoveDirContent;
   RemoveDir(ExcludeTrailingPathDelimiter(FDir));
   SetRequestEnv('');
+end;
+
+procedure TSessionFileTest.TestDefaultSessionDirFromTemp;
+var
+  s: TSessionController;
+  savedTemp: string;
+begin
+  savedTemp := GetEnvironmentVariable('TEMP');
+  try
+    SetRequestEnv('');
+    _SetEnv('TEMP', ExcludeTrailingPathDelimiter(FDir));
+    s := TSessionController.Create;
+    try
+      AssertEquals(FDir + 'sessions' + PathDelim, s.SessionDir);
+      AssertTrue(s.StartSession);
+      AssertTrue(DirectoryExists(FDir + 'sessions'));
+      AssertTrue(FileExists(FDir + 'sessions' + PathDelim + s.SessionID + '.ses'));
+      s.Terminate;
+    finally
+      s.Free;
+    end;
+    RemoveDir(FDir + 'sessions');
+    // no TEMP at all: relative fallback under the application
+    _SetEnv('TEMP', '');
+    s := TSessionController.Create;
+    try
+      AssertEquals(IncludeTrailingPathDelimiter(_SESSION_DIR_DEFAULT), s.SessionDir);
+    finally
+      s.Free;
+    end;
+  finally
+    _SetEnv('TEMP', savedTemp);
+  end;
 end;
 
 procedure TSessionFileTest.TestEncodeDecodeValue;
