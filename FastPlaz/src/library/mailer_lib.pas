@@ -26,6 +26,9 @@ const
 // Format an address as "Name" <email>, or just email when Name is empty.
 // CR/LF are stripped so a value cannot inject extra mail headers.
 function FormatMailAddress(const Email: string; const Name: string = ''): string;
+// EHLO name for ASender: the domain of the sender address, or 'localhost'
+// when the address has none.
+function HeloNameForSender(const ASender: string): string;
 // Replace CR/LF in a header value (Subject, Sender, ...) with a space so a
 // value cannot inject extra mail headers.
 function SanitizeMailHeader(const S: string): string;
@@ -77,7 +80,8 @@ type
     property TLS: boolean read getTLS write setTLS;
     property ErrorMessage: string read FErrorMessage;
     property Logs: string read FLogs;
-    // host name announced in EHLO by the built-in client (default localhost)
+    // host name announced in EHLO by the built-in client; empty (default)
+    // uses the domain of Sender, see HeloNameForSender
     property HeloName: string read FHeloName write FHeloName;
     property Recipients: TStringList read FTo;
     property CcList: TStringList read FCc;
@@ -100,6 +104,33 @@ begin
   Result := StringReplace(S, #13#10, ' ', [rfReplaceAll]);
   Result := StringReplace(Result, #13, ' ', [rfReplaceAll]);
   Result := StringReplace(Result, #10, ' ', [rfReplaceAll]);
+end;
+
+function HeloNameForSender(const ASender: string): string;
+var
+  addr: string;
+  p: integer;
+begin
+  Result := 'localhost';
+  addr := Trim(SanitizeMailHeader(ASender));
+  p := Pos('<', addr);
+  if p > 0 then
+  begin
+    addr := Copy(addr, p + 1, MaxInt);
+    p := Pos('>', addr);
+    if p > 0 then
+      addr := Copy(addr, 1, p - 1);
+  end;
+  p := Pos('@', addr);
+  if p = 0 then
+    Exit;
+  addr := Trim(Copy(addr, p + 1, MaxInt));
+  // a host name: letters, digits, '-' and '.', nothing else
+  for p := 1 to Length(addr) do
+    if not (addr[p] in ['a'..'z', 'A'..'Z', '0'..'9', '-', '.']) then
+      Exit;
+  if addr <> '' then
+    Result := addr;
 end;
 
 function FormatMailAddress(const Email: string; const Name: string): string;
@@ -300,7 +331,9 @@ begin
     client.UserName := FMailUserName;
     client.Password := FMailPassword;
     if Trim(FHeloName) <> '' then
-      client.HeloName := Trim(FHeloName);
+      client.HeloName := Trim(FHeloName)
+    else
+      client.HeloName := HeloNameForSender(Sender);
     if FSSL then
       client.Security := ssSSL
     else if FTLS then
