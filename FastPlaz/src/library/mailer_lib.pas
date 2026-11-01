@@ -11,10 +11,17 @@ uses
   xmailer,
     {$ENDIF}
   {$ENDIF}
+  {$IFNDEF XMAILER}
+  smtp_lib,
+  {$ENDIF}
   Classes, SysUtils;
 
 const
   _MAIL_NOSUPPORT = 'Mailer-Support not exist.';
+
+  { TMailer sends through xmailer (Synapse) when XMAILER is defined, otherwise
+    through smtp_lib, the built-in SMTP client. SSL = implicit TLS (port 465),
+    TLS = STARTTLS (port 587); SSL wins when both are set. }
 
 // Format an address as "Name" <email>, or just email when Name is empty.
 // CR/LF are stripped so a value cannot inject extra mail headers.
@@ -52,6 +59,8 @@ type
 
     {$IFDEF XMAILER}
     procedure xmailer_OnProgress(const AProgress, AMax: integer; const AStatus: string);
+    {$ELSE}
+    function SendNative: boolean;
     {$ENDIF XMAILER}
   public
     Subject, Sender: string;
@@ -181,8 +190,7 @@ begin
     Mail.Free;
   end;
   {$ELSE}
-  FErrorMessage := _MAIL_NOSUPPORT;
-  FLogs := FLogs + _MAIL_NOSUPPORT + #13;
+  Result := SendNative;
   {$ENDIF XMAILER}
 
 end;
@@ -260,6 +268,59 @@ procedure TMailer.xmailer_OnProgress(const AProgress, AMax: integer;
   const AStatus: string);
 begin
   FLogs := FLogs + FormatDateTime('YYYY-mm-dd hh:nn:ss', now) + ' | ' + AStatus + #13;
+end;
+
+{$ELSE}
+function TMailer.SendNative: boolean;
+var
+  client: TSMTPClient;
+  rcpt: TStringList;
+  portNo: integer;
+  i: integer;
+  data: string;
+begin
+  Result := False;
+  if not TryStrToInt(Trim(FPort), portNo) or (portNo <= 0) or (portNo > 65535) then
+  begin
+    if FSSL then
+      portNo := 465
+    else if FTLS then
+      portNo := 587
+    else
+      portNo := 25;
+  end;
+  client := TSMTPClient.Create;
+  rcpt := TStringList.Create;
+  try
+    client.Host := Trim(FMailServer);
+    client.Port := portNo;
+    client.UserName := FMailUserName;
+    client.Password := FMailPassword;
+    if FSSL then
+      client.Security := ssSSL
+    else if FTLS then
+      client.Security := ssStartTLS
+    else
+      client.Security := ssNone;
+    for i := 0 to FTo.Count - 1 do
+      rcpt.Add(FTo[i]);
+    for i := 0 to FCc.Count - 1 do
+      rcpt.Add(FCc[i]);
+    for i := 0 to FBcc.Count - 1 do
+      rcpt.Add(FBcc[i]);
+    data := SMTPBuildMessage(Trim(SanitizeMailHeader(Sender)), FTo.CommaText,
+      FCc.CommaText, Trim(SanitizeMailHeader(Subject)), Message.Text,
+      FEmailFormat = 'html');
+    Result := client.Send(Sender, rcpt, data);
+    if not Result then
+      FErrorMessage := client.ErrorMessage;
+    FLogs := FLogs + StringReplace(client.Log.Text, LineEnding, #13, [rfReplaceAll]);
+    if Result then
+      FLogs := FLogs + 'OK';
+  finally
+    rcpt.Free;
+    client.Free;
+  end;
 end;
 
 {$ENDIF XMAILER}
