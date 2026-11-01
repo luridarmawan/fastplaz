@@ -1446,11 +1446,18 @@ begin
     Result := True;
   except
     on E: Exception do begin
+      // a failed statement is reported through the result and Message
+      // (it used to end the request with DisplayError)
+      AMessage := E.Message;
       if AppData.debug then begin
         LogUtil.add( E.Message);
         LogUtil.add( Data.SQL.Text);
       end;
-      DisplayError( e.Message);
+      if AutoCommit then
+        try
+          TSQLConnector( Data.DataBase).Transaction.RollbackRetaining;
+        except
+        end;
     end;
   end;
   FreeAndNil(sSQL);
@@ -1467,6 +1474,7 @@ begin
     Exit;
   end;
   Result := false;
+  AMessage := '';
   if ((Where='') and (Data.Active)) then
   begin
     if RecordCount <> 1 then exit;
@@ -1513,11 +1521,16 @@ begin
     Result := True;
   except
     on E: Exception do begin
+      AMessage := E.Message;
       if AppData.debug then begin
         LogUtil.add( E.Message);
         LogUtil.add( Data.SQL.Text);
       end;
-      DisplayError( 'DB:' + e.Message);
+      if AutoCommit then
+        try
+          TSQLConnector( Data.DataBase).Transaction.RollbackRetaining;
+        except
+        end;
     end;
   end;
 

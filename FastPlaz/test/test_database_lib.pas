@@ -37,6 +37,7 @@ type
     procedure TearDown; override;
   published
     procedure TestReservedTableNameIsQuoted;
+    procedure TestSaveAndDeleteFailuresReturnFalse;
     procedure TestConnected;
     procedure TestFieldListFromSqlite;
     procedure TestSaveInsertAndLastInsertID;
@@ -196,6 +197,48 @@ begin
     AssertEquals(1, m.RecordCount);
     AssertTrue(m.Delete('id=1'));
     AssertFalse(m.Find([]));
+  finally
+    m.Free;
+  end;
+end;
+
+// a failed INSERT/UPDATE/DELETE used to end the request through
+// DisplayError; now the call returns False and Message says why, and the
+// model stays usable
+procedure TSimpleModelSQLiteTest.TestSaveAndDeleteFailuresReturnFalse;
+var
+  m: TSimpleModel;
+begin
+  Exec('CREATE TABLE uniq(id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE)');
+  m := TSimpleModel.Create('uniq', 'id');
+  try
+    m.New;
+    m['code'] := 'a';
+    AssertTrue(m.Save);
+    AssertEquals('', m.Message);
+    m.New;
+    m['code'] := 'a';
+    AssertFalse(m.Save);
+    AssertTrue(m.Message, Pos('UNIQUE', UpperCase(m.Message)) > 0);
+    // an unknown column
+    m.New;
+    m['nope'] := 'x';
+    AssertFalse(m.Save);
+    AssertTrue(m.Message <> '');
+    // still usable afterwards
+    m.New;
+    m['code'] := 'b';
+    AssertTrue(m.Save);
+    AssertEquals('', m.Message);
+    AssertTrue(m.Find([]));
+    AssertEquals(2, m.RecordCount);
+    // a bad DELETE
+    AssertFalse(m.Delete('nope=1'));
+    AssertTrue(m.Message <> '');
+    AssertTrue(m.Delete('code=''b'''));
+    AssertEquals('', m.Message);
+    AssertTrue(m.Find([]));
+    AssertEquals(1, m.RecordCount);
   finally
     m.Free;
   end;
