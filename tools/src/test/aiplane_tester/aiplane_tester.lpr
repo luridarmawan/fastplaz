@@ -7,10 +7,13 @@ program aiplane_tester;
     aiplane_tester [--runtime claude|opencode|pi|claude-acp|mock]
                    [--command <exe>] [--args "<a b>"] [--cwd <dir>]
                    [--prompt "<a>|<b>"] [--screenshot <file.png>] [--timeout <s>]
+                   [--settings detect|test]
 
   --prompt sends the prompts one after another (separated by |), and
   --screenshot then saves the window to a PNG and quits. A turn that is
-  still running after --timeout seconds (default 5) is left as it is. Together they let
+  still running after --timeout seconds (default 5) is left as it is.
+  --settings opens the settings window (the AI Plane tab of the IDE
+  configuration), runs Detect or Run Test, and the screenshot shows it. Together they let
   a script check the UI without anyone clicking.
 
   Runtime, model, effort, command and working directory are kept in
@@ -25,8 +28,8 @@ program aiplane_tester;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Interfaces, Classes, SysUtils, Forms, Controls, Graphics, ExtCtrls, Menus, LCLType,
-  Dialogs, IniFiles, aiplane_types,
-  aiplane_presets, aiplane_chatframe;
+  Dialogs, IniFiles, StdCtrls, aiplane_types,
+  aiplane_presets, aiplane_chatframe, aiplane_settingsframe;
 
 type
 
@@ -42,12 +45,16 @@ type
     FScriptWait: integer;
     FScriptLimit: integer;
     FScreenshot: string;
+    FSettingsForm: TForm;
+    FSettings: TAIPlaneSettingsFrame;
+    FSettingsAction: string;
     procedure BuildMenu;
+    procedure CreateSettingsForm;
+    procedure MenuSettings(Sender: TObject);
     procedure ScriptTick(Sender: TObject);
     procedure LoadSettings;
     procedure SaveSettings(Sender: TObject);
     procedure ApplyRuntime(const APresetId, ACommand, AArguments: string);
-    procedure MenuCommand(Sender: TObject);
     procedure MenuWorkingDir(Sender: TObject);
     procedure MenuMock(Sender: TObject);
     procedure MenuNew(Sender: TObject);
@@ -97,7 +104,8 @@ begin
   FScript.DelimitedText := Option('--prompt');
   FScreenshot := Option('--screenshot');
   FScriptLimit := StrToIntDef(Option('--timeout'), 5) * 10;
-  if (FScript.Count > 0) or (FScreenshot <> '') then
+  FSettingsAction := Option('--settings');
+  if (FScript.Count > 0) or (FScreenshot <> '') or (FSettingsAction <> '') then
   begin
     FScriptTimer := TTimer.Create(Self);
     FScriptTimer.Interval := 100;
@@ -120,8 +128,21 @@ var
   bmp: TBitmap;
   png: TPortableNetworkGraphic;
   busy: boolean;
+  shotForm: TForm;
 begin
-  busy := Assigned(FChat.Adapter) and FChat.Adapter.IsBusy;
+  if FSettingsAction <> '' then
+  begin
+    CreateSettingsForm;
+    FSettingsForm.Show;
+    if FSettingsAction = 'test' then
+      FSettings.RunTest
+    else
+      FSettings.DetectModels;
+    FSettingsAction := '';
+    Exit;
+  end;
+  busy := (Assigned(FChat.Adapter) and FChat.Adapter.IsBusy) or
+    (Assigned(FSettings) and FSettings.Busy);
   Inc(FScriptWait);
   // A turn that waits for a permission click is not waited for forever.
   if busy and (FScriptWait < FScriptLimit) then
@@ -137,7 +158,10 @@ begin
   if FScreenshot <> '' then
   begin
     Application.ProcessMessages;
-    bmp := GetFormImage;
+    shotForm := Self;
+    if Assigned(FSettingsForm) and FSettingsForm.Visible then
+      shotForm := FSettingsForm;
+    bmp := shotForm.GetFormImage;
     png := TPortableNetworkGraphic.Create;
     try
       png.Assign(bmp);
@@ -176,7 +200,7 @@ begin
   topItem.Caption := '&Chat';
   mm.Items.Add(topItem);
   Add(topItem, '&New conversation', @MenuNew, VK_N);
-  Add(topItem, 'Runtime &command...', @MenuCommand);
+  Add(topItem, '&Settings...', @MenuSettings);
   Add(topItem, '&Working directory...', @MenuWorkingDir);
   Add(topItem, 'Use &mock agent', @MenuMock);
   Add(topItem, '-', nil);
@@ -227,19 +251,63 @@ begin
   end;
 end;
 
-procedure TTesterForm.MenuCommand(Sender: TObject);
+procedure TTesterForm.CreateSettingsForm;
 var
-  command, args: string;
+  bottom: TPanel;
+  btn: TButton;
 begin
-  command := FChat.Command;
-  args := FChat.Arguments;
-  if not InputQuery('Runtime command', 'Executable (empty = preset default):', command) then
+  if Assigned(FSettingsForm) then
     Exit;
-  if not InputQuery('Runtime command', 'Arguments (empty = preset default):', args) then
-    Exit;
-  FMock := False;
-  ApplyRuntime(FChat.PresetId, Trim(command), Trim(args));
-  SaveSettings(nil);
+  FSettingsForm := TForm.CreateNew(Self);
+  FSettingsForm.Caption := 'AI Plane Settings';
+  FSettingsForm.Width := 600;
+  FSettingsForm.Height := 440;
+  FSettingsForm.Position := poMainFormCenter;
+  bottom := TPanel.Create(FSettingsForm);
+  bottom.Parent := FSettingsForm;
+  bottom.Align := alBottom;
+  bottom.Height := 44;
+  bottom.BevelOuter := bvNone;
+  btn := TButton.Create(FSettingsForm);
+  btn.Parent := bottom;
+  btn.Caption := 'Cancel';
+  btn.ModalResult := mrCancel;
+  btn.Cancel := True;
+  btn.SetBounds(bottom.Width - 96, 8, 88, 28);
+  btn.Anchors := [akTop, akRight];
+  btn := TButton.Create(FSettingsForm);
+  btn.Parent := bottom;
+  btn.Caption := 'Save';
+  btn.ModalResult := mrOK;
+  btn.Default := True;
+  btn.SetBounds(bottom.Width - 192, 8, 88, 28);
+  btn.Anchors := [akTop, akRight];
+  FSettings := TAIPlaneSettingsFrame.Create(FSettingsForm);
+  FSettings.Parent := FSettingsForm;
+  FSettings.Align := alClient;
+  FSettings.Runtime := FChat.PresetId;
+  FSettings.Command := FChat.Command;
+  FSettings.Arguments := FChat.Arguments;
+  FSettings.Model := FChat.Model;
+  FSettings.Effort := FChat.Effort;
+  FSettings.WorkingDir := FChat.WorkingDir;
+end;
+
+procedure TTesterForm.MenuSettings(Sender: TObject);
+begin
+  FreeAndNil(FSettingsForm);
+  FSettings := nil;
+  CreateSettingsForm;
+  if FSettingsForm.ShowModal = mrOK then
+  begin
+    FMock := False;
+    FChat.Model := FSettings.Model;
+    FChat.Effort := FSettings.Effort;
+    ApplyRuntime(FSettings.Runtime, FSettings.Command, FSettings.Arguments);
+    SaveSettings(nil);
+  end;
+  FreeAndNil(FSettingsForm);
+  FSettings := nil;
 end;
 
 procedure TTesterForm.MenuWorkingDir(Sender: TObject);

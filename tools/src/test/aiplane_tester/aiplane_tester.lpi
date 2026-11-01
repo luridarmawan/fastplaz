@@ -43,6 +43,13 @@
         <Filename Value="..\..\ai_plane\aiplane_chatview.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>
+      <Unit>
+        <Filename Value="..\..\ai_plane\aiplane_settingsframe.pas"/>
+        <IsPartOfProject Value="True"/>
+        <ComponentName Value="AIPlaneSettingsFrame"/>
+        <HasResources Value="True"/>
+        <ResourceBaseClass Value="Frame"/>
+      </Unit>
     </Units>
   </ProjectOptions>
   <CompilerOptions>

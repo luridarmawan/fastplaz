@@ -1,0 +1,10 @@
+object AIPlaneWindow: TAIPlaneWindow
+  Left = 250
+  Height = 640
+  Top = 120
+  Width = 460
+  Caption = 'AI Plane'
+  ClientHeight = 640
+  ClientWidth = 460
+  LCLVersion = '4.8.0.0'
+end

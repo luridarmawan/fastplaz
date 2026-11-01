@@ -5,8 +5,9 @@ coding agents such as Claude Code, OpenCode and Pi. This folder holds the core,
 which has no LCL or IDEIntf dependency, so the IDE package, a standalone tester
 and the unit tests all share the same code.
 
-Status: **phase 2** — core adapters, chat frame and LCL tester. The IDE
-window and the configuration tab are next.
+Status: **phase 3** — core adapters, chat frame, LCL tester and the IDE
+integration (menu *FastPlaz → AI Plane*, dockable window, *AI Plane* tab in
+*Fast Code Configuration*).
 
 ## Units
 
@@ -18,6 +19,8 @@ window and the configuration tab are next.
 | `aiplane_claude.pas` | `TClaudeStreamAdapter`: Claude Code `--input-format/--output-format stream-json` |
 | `aiplane_presets.pas` | Known runtimes (command, arguments, adapter class), `AICreateAdapter()` |
 | `aiplane_chatview.pas` | `TAIChatView` (LCL): owner drawn conversation with bubbles, ``` code blocks, foldable tool/thinking/plan cards, permission buttons, copy menu |
+| `aiplane_settingsframe.pas/.lfm` | `TAIPlaneSettingsFrame` (LCL): default runtime, command, arguments, model (*Detect* reads the runtime's list), effort and *Run Test* |
+| `aiplane_ide.pas/.lfm` | IDEIntf: `AIPlaneWindow` (dockable, hosts the chat), menu handler, settings in `config.json` under `aiplane`, project directory as working directory, unsaved editor buffers served to the agent |
 | `aiplane_chatframe.pas/.lfm` | `TAIChatFrame` (LCL): runtime/model/effort pickers, conversation, input (Enter sends, Shift+Enter new line, Esc stops), Send/Stop, protocol log, status line |
 
 ## How the UI uses it
@@ -36,6 +39,16 @@ Adapter.Poll;
 Every event is raised from `Poll`, in the caller's thread, so handlers can
 update controls directly. Do not call `Prompt`/`Start` from inside an event
 handler of the same adapter; post it (`Application.QueueAsyncCall`).
+
+## In the IDE
+
+* *FastPlaz → AI Plane* opens the chat window; it docks like any IDE window.
+* *FastPlaz → Fast Code Configuration → AI Plane* sets the default runtime,
+  command, arguments, model and effort (`config.json`, key `aiplane`).
+  Runtime, model and effort picked in the chat window become the new
+  defaults too.
+* The runtime starts in the active project's directory and restarts when
+  another project is opened (checked when the window is activated).
 
 ## Runtimes
 
@@ -73,12 +86,13 @@ Spike findings (2026-11-02):
 * `tools/src/test/aiplane_tester/aiplane_tester.lpi` — LCL window hosting
   `TAIChatFrame`, the same chat as the IDE (`lazbuild aiplane_tester.lpi`).
   Settings live in `aiplane_tester.ini` in the user config folder; the
-  *Chat* menu sets the runtime command, the working directory or the mock
-  agent. For scripted UI checks:
+  *Chat* menu opens the same settings page as the IDE tab, the working
+  directory or the mock agent. For scripted UI checks:
 
   ```
   aiplane_tester --runtime mock --prompt "hello|plan|permission" --screenshot ui.png
   aiplane_tester --runtime opencode --prompt "Explain tools_lib" --timeout 120 --screenshot ui.png
+  aiplane_tester --runtime opencode --settings detect --timeout 60 --screenshot settings.png
   ```
 
 * `tools/src/test/aiplane_cli.lpr` — console chat on the same adapters:
@@ -96,10 +110,7 @@ Spike findings (2026-11-02):
 
 ## Next steps
 
-1. IDE integration: dockable window, menu before *Database Explorer*,
-   *AI Plane* tab in *Fast Code Configuration* with *Run Test*, unsaved
-   editor buffers through `OnReadFile`.
-2. Chat view: inline markdown (bold, `code`), text selection, keeping the
+1. Chat view: inline markdown (bold, `code`), text selection, keeping the
    conversation across IDE restarts.
-3. IDE tools for the agent: `fs/write_text_file` into editor buffers, an MCP
+2. IDE tools for the agent: `fs/write_text_file` into editor buffers, an MCP
    server for "open file in the IDE" and similar actions.
