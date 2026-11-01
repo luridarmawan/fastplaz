@@ -108,6 +108,9 @@ type
 
     function ParamByName(Const AParamName : String) : TParam;
     property SQL : TStringlist read getSQL;
+    // SQL string literal for the active connector: single quotes doubled,
+    // backslashes doubled as well when the connector is MySQL
+    function QuoteValue(const AValue: string): string;
     function Exec( ASQL:String): boolean;
 
     function All(const AUniDirectional: boolean = false):boolean;
@@ -1495,6 +1498,16 @@ end;
 
 // Marks rows as deleted instead of removing them. This used to be a stub
 // that returned False, so Delete with UseSoftDelete did nothing.
+function TSimpleModel.QuoteValue(const AValue: string): string;
+var
+  s: string;
+begin
+  s := AValue;
+  if Assigned(Connector) and (Pos('mysql', LowerCase(Connector.ConnectorType)) > 0) then
+    s := StringReplace(s, '\', '\\', [rfReplaceAll]);
+  Result := QuotedStr(s);
+end;
+
 function TSimpleModel.SoftDelete(Where: string; AutoCommit: boolean): boolean;
 var
   s: string;
