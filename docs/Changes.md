@@ -1,5 +1,16 @@
 # Development Changes
 
+## 20261102
+
+New Feature/Library:
+- model: `ExecScript`, `QueryExecScript`, `ExecSQLScript` run a multi-statement SQL script (SQLite and MySQL `ExecuteDirect` take one statement per call) in one transaction, rolled back on the first failure
+- model: `SplitSQLStatements` splits a script on `;` outside quotes, comments, `$tag$` bodies and trigger `BEGIN..END` blocks
+- tools: FastPlaz > Open Console/Terminal and editor popup Open Terminal from Here
+
+Bug Fix:
+- model: `Find(string)` quotes the key value
+- regexpr: include file renamed `regexpr_compilers_lib.inc` (duplicate file warning with LazEdit when rebuilding the IDE)
+
 ## 20261101
 
 Review and fix pass over `FastPlaz/src` and `tools/src`, with an FPCUnit suite for every library unit. Read [UPGRADE.md](UPGRADE.md) before upgrading: some changes alter how an application behaves.
