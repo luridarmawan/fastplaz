@@ -38,6 +38,10 @@
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
+        <Filename Value="fastplaz_testrunner.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
         <Filename Value="test_datetime_lib.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>

@@ -57,6 +57,7 @@ Notes:
 * The compiled program is stored in the `instantfpc` cache (`instantfpc --get-cache`), not in the repository.
 * On Windows, if `instantfpc` is not in `PATH`, `run_tests.bat` uses `C:\lazarus\fpc\3.2.2\bin\x86_64-win64`.
 * `FastPlaz/test/run_tests.*` adds the unit paths of the `fastplaz_runtime` package, because `datetime_lib` depends on `language_lib` and `common`.
+* `tools/src/test/run_tests.*` adds `FastPlaz/test` to the unit path for the shared `fastplaz_testrunner` unit.
 
 ### Redis tests
 
@@ -109,13 +110,22 @@ Linux / macOS:
 ./regex_tester_test -a
 ```
 
-Example output:
+Both projects use `TFastPlazTestRunner` (`FastPlaz/test/fastplaz_testrunner.pas`), a thin extension of the FPCUnit console runner that prints every suite and every test the moment it starts, followed by its result and duration. A long run therefore shows what is going on instead of staying silent until the end. Example output:
 
 ```
-Number of run tests: 16
-Number of errors:    0
-Number of failures:  0
+FastPlaz Tools - Regex Tester Test
+
+TRegexTesterLibTest (16 tests)
+  [ 1/16] TestEmptyExpression ............................ OK (0 ms)
+  [ 2/16] TestEmptyText .................................. OK (0 ms)
+  ...
+  [16/16] TestIpRegexInvalid ............................. OK (0 ms)
+
+------------------------------------------------------------------------
+PASSED  tests: 16  passed: 16  failed: 0  errors: 0  ignored: 0  time: 0 ms
 ```
+
+A failing test is marked `FAILED` (assertion) or `ERROR` (exception) with the message right below it, an `Ignore()` call shows up as `IGNORED`, and all problems are listed again in the summary. Results are colored when stdout is a terminal (set `NO_COLOR` or pass `--no-color` to turn that off); when the output is redirected to a file the same text is written without escape codes.
 
 The program exits with code `0` when all tests pass and a non-zero code when a test fails, so it can be used in scripts or CI.
 
@@ -127,9 +137,13 @@ The program exits with code `0` when all tests pass and a non-zero code when a t
 | `-l`, `--list` | list registered tests |
 | `--suite=NAME` | run a single test class or test method, e.g. `--suite=TestEmailRegex` |
 | `--format=FMT` | output format: `plain` (default for this project), `plainnotiming`, `xml`, `latex` |
-| `--sparse` | show only errors and failures |
-| `--file=FILE` | write the result to a file, e.g. `--format=xml --file=result.xml` |
+| `--sparse` | show only errors and failures (plain FPCUnit report only) |
+| `--file=FILE` | write the result to a file, e.g. `--format=xml --file=result.xml`; the live progress still goes to the console |
+| `--no-live` | plain FPCUnit output: nothing is printed until the run has finished |
+| `--no-color` | no ANSI colors in the live output |
 | `-h` | show all options |
+
+The live output is switched off automatically when a machine readable format (`xml`, `latex`) is written to stdout, so `--format=xml > result.xml` stays valid XML.
 
 ### Running from the Lazarus IDE
 
@@ -228,6 +242,7 @@ Catatan:
 * Program hasil compile disimpan di cache `instantfpc` (`instantfpc --get-cache`), bukan di repositori.
 * Di Windows, jika `instantfpc` tidak ada di `PATH`, `run_tests.bat` memakai `C:\lazarus\fpc\3.2.2\bin\x86_64-win64`.
 * `FastPlaz/test/run_tests.*` menambahkan path unit dari package `fastplaz_runtime`, karena `datetime_lib` bergantung pada `language_lib` dan `common`.
+* `tools/src/test/run_tests.*` menambahkan `FastPlaz/test` ke path unit untuk unit bersama `fastplaz_testrunner`.
 
 ### Test Redis
 
@@ -280,13 +295,22 @@ Linux / macOS:
 ./regex_tester_test -a
 ```
 
-Contoh output:
+Kedua project memakai `TFastPlazTestRunner` (`FastPlaz/test/fastplaz_testrunner.pas`), turunan tipis dari console runner FPCUnit yang mencetak setiap suite dan setiap test begitu mulai dijalankan, diikuti hasil dan durasinya. Jadi saat test berjalan lama, terlihat test mana yang sedang berjalan, bukan diam sampai selesai. Contoh output:
 
 ```
-Number of run tests: 16
-Number of errors:    0
-Number of failures:  0
+FastPlaz Tools - Regex Tester Test
+
+TRegexTesterLibTest (16 tests)
+  [ 1/16] TestEmptyExpression ............................ OK (0 ms)
+  [ 2/16] TestEmptyText .................................. OK (0 ms)
+  ...
+  [16/16] TestIpRegexInvalid ............................. OK (0 ms)
+
+------------------------------------------------------------------------
+PASSED  tests: 16  passed: 16  failed: 0  errors: 0  ignored: 0  time: 0 ms
 ```
+
+Test yang gagal ditandai `FAILED` (assertion) atau `ERROR` (exception) dengan pesannya tepat di bawahnya, pemanggilan `Ignore()` tampil sebagai `IGNORED`, dan semua masalah diulang lagi di ringkasan akhir. Hasil diberi warna bila stdout adalah terminal (set `NO_COLOR` atau beri `--no-color` untuk mematikannya); bila output dialihkan ke file, teks yang sama ditulis tanpa kode escape.
 
 Program keluar dengan kode `0` jika semua test lulus, dan kode selain `0` jika ada test yang gagal, sehingga bisa dipakai di script atau CI.
 
@@ -298,9 +322,13 @@ Program keluar dengan kode `0` jika semua test lulus, dan kode selain `0` jika a
 | `-l`, `--list` | tampilkan daftar test yang terdaftar |
 | `--suite=NAMA` | jalankan satu class test atau satu method test saja, contoh `--suite=TestEmailRegex` |
 | `--format=FMT` | format output: `plain` (default di project ini), `plainnotiming`, `xml`, `latex` |
-| `--sparse` | hanya tampilkan error dan failure |
-| `--file=FILE` | simpan hasil ke file, contoh `--format=xml --file=result.xml` |
+| `--sparse` | hanya tampilkan error dan failure (hanya untuk laporan plain FPCUnit) |
+| `--file=FILE` | simpan hasil ke file, contoh `--format=xml --file=result.xml`; progres live tetap tampil di console |
+| `--no-live` | output plain FPCUnit: tidak ada yang dicetak sampai seluruh test selesai |
+| `--no-color` | tanpa warna ANSI pada output live |
 | `-h` | tampilkan semua opsi |
+
+Output live otomatis dimatikan bila format yang bisa dibaca mesin (`xml`, `latex`) ditulis ke stdout, sehingga `--format=xml > result.xml` tetap menghasilkan XML yang valid.
 
 ### Menjalankan dari Lazarus IDE
 

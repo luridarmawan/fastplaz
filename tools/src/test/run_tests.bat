@@ -10,8 +10,9 @@ if errorlevel 1 set "PATH=C:\lazarus\fpc\3.2.2\bin\x86_64-win64;%PATH%"
 
 rem instantfpc does not accept -Fu paths on its command line, pass them here.
 rem -B: always rebuild, the cache only tracks the main program source.
-set "INSTANTFPCOPTIONS=-B -Fu.. -Fu..\..\..\FastPlaz\src\library"
+set "INSTANTFPCOPTIONS=-B -Fu.. -Fu..\..\..\FastPlaz\src\library -Fu..\..\..\FastPlaz\test"
 
+echo Compiling (instantfpc)...
 if "%~1"=="" (
   instantfpc regex_tester_test.lpr -a
 ) else (

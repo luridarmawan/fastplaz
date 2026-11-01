@@ -5,8 +5,9 @@
 cd "$(dirname "$0")" || exit 1
 
 # -B: always rebuild, the cache only tracks the main program source.
-export INSTANTFPCOPTIONS="-B -Fu.. -Fu../../../FastPlaz/src/library"
+export INSTANTFPCOPTIONS="-B -Fu.. -Fu../../../FastPlaz/src/library -Fu../../../FastPlaz/test"
 
+echo "Compiling (instantfpc)..."
 if [ $# -eq 0 ]; then
   set -- -a
 fi

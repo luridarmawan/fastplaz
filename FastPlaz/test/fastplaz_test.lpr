@@ -3,7 +3,7 @@ program fastplaz_test;
 {$mode objfpc}{$H+}
 
 uses
-  Classes, consoletestrunner, test_datetime_lib, test_redis_lib,
+  Classes, consoletestrunner, fastplaz_testrunner, test_datetime_lib, test_redis_lib,
   test_json_lib, test_config_lib, test_common, test_math_lib,
   test_http_lib, test_mailer_lib, test_logutil_lib, test_smtp_lib,
   test_stemmingnazief_lib, test_html_lib, test_recaptcha_lib, test_rss_lib,
@@ -14,7 +14,7 @@ type
 
   { TMyTestRunner }
 
-  TMyTestRunner = class(TTestRunner)
+  TMyTestRunner = class(TFastPlazTestRunner)
   protected
   end;
 
