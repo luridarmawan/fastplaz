@@ -159,6 +159,10 @@ const
 function AIEvent(AKind: TAIEventKind; const AText: string = ''): TAIEvent;
 function AIToolStatusFromString(const AValue: string): TAIToolStatus;
 function AIStateToString(AState: TAIAdapterState): string;
+{ Splits message text into prose and ``` code blocks. Objects[i] <> nil marks
+  a code block. Prose is trimmed and empty prose is dropped; an unclosed
+  fence (still streaming) counts as code. The caller frees the list. }
+function AISplitCodeBlocks(const AText: string): TStringList;
 
 implementation
 
@@ -186,6 +190,49 @@ const
     ('idle', 'starting', 'ready', 'busy', 'stopped', 'failed');
 begin
   Result := NAMES[AState];
+end;
+
+function AISplitCodeBlocks(const AText: string): TStringList;
+var
+  lines: TStringList;
+  i: integer;
+  inCode: boolean;
+  current: string;
+
+  procedure Flush;
+  begin
+    // Objects: 1 = code block
+    if inCode then
+      Result.AddObject(current, TObject(PtrInt(1)))
+    else if Trim(current) <> '' then
+      Result.AddObject(Trim(current), nil);
+    current := '';
+  end;
+
+begin
+  Result := TStringList.Create;
+  lines := TStringList.Create;
+  try
+    lines.Text := AText;
+    inCode := False;
+    current := '';
+    for i := 0 to lines.Count - 1 do
+    begin
+      if Copy(TrimLeft(lines[i]), 1, 3) = '```' then
+      begin
+        Flush;
+        inCode := not inCode;
+        Continue;
+      end;
+      if current <> '' then
+        current := current + LineEnding;
+      current := current + lines[i];
+    end;
+    // An unclosed fence while streaming is still shown as code.
+    Flush;
+  finally
+    lines.Free;
+  end;
 end;
 
 { TAIAdapter }

@@ -5,8 +5,8 @@ coding agents such as Claude Code, OpenCode and Pi. This folder holds the core,
 which has no LCL or IDEIntf dependency, so the IDE package, a standalone tester
 and the unit tests all share the same code.
 
-Status: **phase 0/1** — protocol spike and core adapters. The IDE window, the
-configuration tab and the LCL tester are next.
+Status: **phase 2** — core adapters, chat frame and LCL tester. The IDE
+window and the configuration tab are next.
 
 ## Units
 
@@ -17,6 +17,8 @@ configuration tab and the LCL tester are next.
 | `aiplane_acp.pas` | `TACPAdapter`: Agent Client Protocol (JSON-RPC 2.0 over stdio) |
 | `aiplane_claude.pas` | `TClaudeStreamAdapter`: Claude Code `--input-format/--output-format stream-json` |
 | `aiplane_presets.pas` | Known runtimes (command, arguments, adapter class), `AICreateAdapter()` |
+| `aiplane_chatview.pas` | `TAIChatView` (LCL): owner drawn conversation with bubbles, ``` code blocks, foldable tool/thinking/plan cards, permission buttons, copy menu |
+| `aiplane_chatframe.pas/.lfm` | `TAIChatFrame` (LCL): runtime/model/effort pickers, conversation, input (Enter sends, Shift+Enter new line, Esc stops), Send/Stop, protocol log, status line |
 
 ## How the UI uses it
 
@@ -68,6 +70,17 @@ Spike findings (2026-11-02):
   (`run_tests.bat` / `run_tests.sh`). The ACP tests run against
   `mock_acp_agent`, a fake runtime with scripted scenarios (`hello`, `read
   <path>`, `permission`, `slow`, `crash`, `fail`, ...).
+* `tools/src/test/aiplane_tester/aiplane_tester.lpi` — LCL window hosting
+  `TAIChatFrame`, the same chat as the IDE (`lazbuild aiplane_tester.lpi`).
+  Settings live in `aiplane_tester.ini` in the user config folder; the
+  *Chat* menu sets the runtime command, the working directory or the mock
+  agent. For scripted UI checks:
+
+  ```
+  aiplane_tester --runtime mock --prompt "hello|plan|permission" --screenshot ui.png
+  aiplane_tester --runtime opencode --prompt "Explain tools_lib" --timeout 120 --screenshot ui.png
+  ```
+
 * `tools/src/test/aiplane_cli.lpr` — console chat on the same adapters:
 
   ```
@@ -83,10 +96,10 @@ Spike findings (2026-11-02):
 
 ## Next steps
 
-1. `aiplane_chatframe.pas`: the chat as a `TFrame` (conversation, tool cards,
-   permission buttons, model picker, runtime info).
-2. LCL tester app hosting that frame (same behaviour as the IDE window).
-3. IDE integration: dockable window, menu before *Database Explorer*,
-   *AI Plane* tab in *Fast Code Configuration* with *Run Test*.
-4. IDE tools for the agent: `fs/write_text_file` into editor buffers, an MCP
+1. IDE integration: dockable window, menu before *Database Explorer*,
+   *AI Plane* tab in *Fast Code Configuration* with *Run Test*, unsaved
+   editor buffers through `OnReadFile`.
+2. Chat view: inline markdown (bold, `code`), text selection, keeping the
+   conversation across IDE restarts.
+3. IDE tools for the agent: `fs/write_text_file` into editor buffers, an MCP
    server for "open file in the IDE" and similar actions.

@@ -1,0 +1,11 @@
+object AIChatFrame: TAIChatFrame
+  Left = 0
+  Height = 520
+  Top = 0
+  Width = 420
+  ClientHeight = 520
+  ClientWidth = 420
+  TabOrder = 0
+  DesignLeft = 300
+  DesignTop = 200
+end

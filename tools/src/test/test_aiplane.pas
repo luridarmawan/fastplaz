@@ -53,6 +53,10 @@ type
     procedure TestPresetOverridesCommand;
     procedure TestUnknownPresetRaises;
     procedure TestClaudeEffortArg;
+    procedure TestSplitProseOnly;
+    procedure TestSplitCodeBlock;
+    procedure TestSplitUnclosedFence;
+    procedure TestSplitEmpty;
   end;
 
   { TACPAdapterTest }
@@ -311,6 +315,65 @@ begin
   AssertEquals('low', ClaudeEffortArg('minimal'));
   AssertEquals('medium', ClaudeEffortArg('Medium'));
   AssertEquals('xhigh', ClaudeEffortArg('xhigh'));
+end;
+
+procedure TAIPlaneHelpersTest.TestSplitProseOnly;
+var
+  parts: TStringList;
+begin
+  parts := AISplitCodeBlocks('  Hello' + LineEnding + 'world  ');
+  try
+    AssertEquals(1, parts.Count);
+    AssertEquals('Hello' + LineEnding + 'world', parts[0]);
+    AssertNull(parts.Objects[0]);
+  finally
+    parts.Free;
+  end;
+end;
+
+procedure TAIPlaneHelpersTest.TestSplitCodeBlock;
+var
+  parts: TStringList;
+begin
+  parts := AISplitCodeBlocks('Before' + LineEnding + '```pascal' + LineEnding +
+    'begin' + LineEnding + '  WriteLn;' + LineEnding + 'end.' + LineEnding + '```' +
+    LineEnding + 'After');
+  try
+    AssertEquals(3, parts.Count);
+    AssertEquals('Before', parts[0]);
+    AssertNotNull('code block', parts.Objects[1]);
+    AssertEquals('indentation kept', 'begin' + LineEnding + '  WriteLn;' + LineEnding + 'end.', parts[1]);
+    AssertEquals('After', parts[2]);
+    AssertNull(parts.Objects[2]);
+  finally
+    parts.Free;
+  end;
+end;
+
+procedure TAIPlaneHelpersTest.TestSplitUnclosedFence;
+var
+  parts: TStringList;
+begin
+  parts := AISplitCodeBlocks('Code:' + LineEnding + '```' + LineEnding + 'x := 1;');
+  try
+    AssertEquals(2, parts.Count);
+    AssertNotNull('still streaming, shown as code', parts.Objects[1]);
+    AssertEquals('x := 1;', parts[1]);
+  finally
+    parts.Free;
+  end;
+end;
+
+procedure TAIPlaneHelpersTest.TestSplitEmpty;
+var
+  parts: TStringList;
+begin
+  parts := AISplitCodeBlocks('');
+  try
+    AssertEquals(0, parts.Count);
+  finally
+    parts.Free;
+  end;
 end;
 
 { TACPAdapterTest }
