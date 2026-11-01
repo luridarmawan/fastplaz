@@ -67,9 +67,12 @@ type
     FJsonObject: TJSONObject;
     FItems: TFPObjectList;
     FModified: boolean;
+    function GetAsArray: TJSONArray;
     function GetAsJSON: TJSONStringType;
     function GetAsJSONFormated: TJSONStringType;
+    function GetIsArray: boolean;
     function getIsEmpty: boolean;
+    function GetIsObject: boolean;
     function GetItem(PathString: UnicodeString): TJSONUtilItem;
     function GetValue(PathString: UnicodeString): variant;
     function GetValueArray(PathString: UnicodeString): TJSONArray;
@@ -93,7 +96,14 @@ type
     procedure Clear;
     procedure DeletePath(const PathString: UnicodeString);
     property Modified: boolean read FModified;
+    // The root of the document. It is normally a TJSONObject; after loading
+    // a JSON array it is a TJSONArray instance behind this type (check
+    // IsArray, or use AsArray) and the path based accessors are no-ops.
     property Data: TJSONObject read FJsonObject;
+    property IsObject: boolean read GetIsObject;
+    property IsArray: boolean read GetIsArray;
+    // the root as an array; nil when the root is an object
+    property AsArray: TJSONArray read GetAsArray;
     property AsJSON: TJSONStringType read GetAsJSON;
     property AsJSONFormated: TJSONStringType read GetAsJSONFormated;
     property Value[PathString: UnicodeString]: variant read GetValue write SetValue; default;
@@ -107,7 +117,7 @@ type
     property IsEmpty: boolean read getIsEmpty;
 
     // Returns False (and leaves an empty object) when JsonString is not a
-    // JSON object.
+    // JSON object or array.
     function LoadFromJsonString(const JsonString: string; Const UseUTF8 : Boolean = False): boolean;
     function SaveToFile(AFileName: string): boolean;
   end;
@@ -356,6 +366,23 @@ begin
   Result := FJsonObject.AsJSON;
 end;
 
+function TJSONUtil.GetIsObject: boolean;
+begin
+  Result := Assigned(FJsonObject) and (FJsonObject.JSONType = jtObject);
+end;
+
+function TJSONUtil.GetIsArray: boolean;
+begin
+  Result := Assigned(FJsonObject) and (FJsonObject.JSONType = jtArray);
+end;
+
+function TJSONUtil.GetAsArray: TJSONArray;
+begin
+  Result := nil;
+  if GetIsArray then
+    Result := TJSONArray(TJSONData(FJsonObject));
+end;
+
 function TJSONUtil.GetAsJSONFormated: TJSONStringType;
 begin
   Result := JsonFormatter(AsJSON, False);
@@ -529,7 +556,14 @@ var
 begin
   //  Writeln('Looking for : ', APath);
   S := PathString;
-  // relative and absolute paths both start at the root
+  // relative and absolute paths both start at the root; an array root has
+  // no named children, so every path misses
+  if not GetIsObject then
+  begin
+    Result := nil;
+    ElementName := S;
+    Exit;
+  end;
   Result := FJsonObject;
   repeat
     P := Pos('/', S);
@@ -628,10 +662,18 @@ begin
   inherited Destroy;
 end;
 
+// Empties the document; the root becomes an (empty) object again.
 procedure TJSONUtil.Clear;
 begin
   FItems.Clear;
-  FJsonObject.Clear;
+  if GetIsObject then
+    FJsonObject.Clear
+  else
+  begin
+    FreeAndNil(FJsonObject);
+    FJsonObject := TJSONObject.Create;
+  end;
+  FModified := False;
 end;
 
 procedure TJSONUtil.DeletePath(const PathString: UnicodeString);
@@ -671,14 +713,16 @@ begin
   except
     parsed := nil;
   end;
-  if parsed is TJSONObject then
+  if (parsed is TJSONObject) or (parsed is TJSONArray) then
   begin
+    // an array root is kept behind the TJSONObject typed field for the
+    // callers that cast Data to TJSONArray; see the Data property
     FJsonObject := TJSONObject(parsed);
     Result := True;
   end
   else
   begin
-    // empty input, a scalar or an array: not a document we can address
+    // empty input or a scalar: not a document we can address
     parsed.Free;
     FJsonObject := TJSONObject.Create;
   end;

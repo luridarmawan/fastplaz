@@ -29,7 +29,7 @@ unit office365_integration;
 interface
 
 uses
-  http_lib,
+  http_lib, fpjson,
   Classes, SysUtils;
 
 type
@@ -70,13 +70,14 @@ function To365GroupIntegration.CustomSend(JsonMessage: string): IHTTPResponse;
 begin
   FIsSuccessfull := False;
   with THTTPLib.Create(URL) do
-  begin
+  try
     ContentType := 'application/json';
 
     RequestBody := TStringStream.Create(JsonMessage);
 
     Result := Post;
     FIsSuccessfull := IsSuccessfull;
+  finally
     Free;
   end;
 end;
@@ -87,14 +88,17 @@ var
 begin
   FIsSuccessfull := False;
   with THTTPLib.Create(URL) do
-  begin
+  try
     ContentType := 'application/json';
 
-    s := '{"title":"' + FTitle + '","text": "' + FText + '", "themeColor":"' + FThemeColor + '"}';
+    s := '{"title":"' + StringToJSONString(FTitle, False) + '","text": "'
+      + StringToJSONString(FText, False) + '", "themeColor":"'
+      + StringToJSONString(FThemeColor, False) + '"}';
     RequestBody := TStringStream.Create(s);
 
     Result := Post;
     FIsSuccessfull := IsSuccessfull;
+  finally
     Free;
   end;
 

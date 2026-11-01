@@ -46,7 +46,7 @@ type
     function isPermitted: boolean;
   public
     constructor Create;
-    destructor Destroy;
+    destructor Destroy; override;
 
     property Debug: boolean read FDebug write FDebug;
     property IsSuccessfull: boolean read FIsSuccessfull;
@@ -80,8 +80,6 @@ const
   //_PAGAR = '️⃣';
   //_BINTANG = '*️⃣';
 
-var
-  Response: IHTTPResponse;
 
 { TKlaudlessCalendarIntegration }
 
@@ -105,6 +103,7 @@ destructor TKlaudlessCalendarIntegration.Destroy;
 begin
   if Assigned(jsonData) then
     jsonData.Free;
+  inherited Destroy;
 end;
 
 function TKlaudlessCalendarIntegration.GetEventListAsJson(AAccountID,
@@ -118,6 +117,7 @@ function TKlaudlessCalendarIntegration.GetEventListAsJson(AAccountID,
   ACalendarID: string;
   AStartTime: TimestampISO8601; AEndTime: TimestampISO8601): string;
 var
+  Response: IHTTPResponse;
   urlTarget: string;
 begin
   Result := '';
@@ -134,7 +134,7 @@ begin
     urlTarget := urlTarget + '&end=' + UrlEncode(AEndTime);
 
   with THTTPLib.Create(urlTarget) do
-  begin
+  try
     try
       //ContentType := 'application/json';
       AddHeader('Authorization', 'APIkey ' + FAPIKey);
@@ -143,6 +143,7 @@ begin
       FResultText := Response.ResultText;
       if Response.ResultCode = 200 then
       begin
+        FreeAndNil(jsonData);
         jsonData := GetJSON(FResultText);
         Result := FResultText;
       end;
@@ -153,6 +154,7 @@ begin
           LogUtil.Add(e.Message, 'KLAUD');
       end;
     end;
+  finally
     Free;
   end;
 end;
@@ -234,6 +236,7 @@ end;
 function TKlaudlessCalendarIntegration.EventCreate(AAccountID, ACalendarID: string;
   AEventName: string; AStartTime: TimestampISO8601; AEndTime: TimestampISO8601): string;
 var
+  Response: IHTTPResponse;
   s, urlTarget: string;
 begin
   Result := '';
@@ -246,14 +249,14 @@ begin
     [UrlEncode(AAccountID), UrlEncode(ACalendarID)]) + '?_=1';
 
   s := '{';
-  s := s + '"name": "' + AEventName + '",';
-  s := s + '"start": "' + AStartTime + '",';
-  s := s + '"end": "' + AEndTime + '",';
+  s := s + '"name": "' + StringToJSONString(AEventName, False) + '",';
+  s := s + '"start": "' + StringToJSONString(AStartTime, False) + '",';
+  s := s + '"end": "' + StringToJSONString(AEndTime, False) + '",';
   s := s + '"nonet": "none"';
   s := s + '}';
 
   with THTTPLib.Create(urlTarget) do
-  begin
+  try
     try
       ContentType := 'application/json';
       AddHeader('Authorization', 'APIkey ' + FAPIKey);
@@ -263,6 +266,7 @@ begin
       FResultText := Response.ResultText;
       if (Response.ResultCode = 200) or (Response.ResultCode = 201) then
       begin
+        FreeAndNil(jsonData);
         jsonData := GetJSON(FResultText);
         s := jsonGetData(jsonData, 'message');
         if s = '' then
@@ -277,6 +281,7 @@ begin
           LogUtil.Add(e.Message, 'KLAUD');
       end;
     end;
+  finally
     Free;
   end;
 end;

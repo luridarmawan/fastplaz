@@ -57,7 +57,7 @@ type
     HttpResult: IHTTPResponse;
     HttpResultAsText: string;
     constructor Create;
-    destructor Destroy;
+    destructor Destroy; override;
     function ChatCompletion(APrompt: string; ARole: string = 'user'): boolean;
     function ListModels(AModels: TStrings): boolean;
   published
@@ -77,10 +77,6 @@ const
   OPENAI_MODEL_DEFAULT = 'gpt-3.5-turbo';
   OPENAI_TEMPERATURE_DEFAULT = 0;
   OPENAI_MAXTOKEN_DEFAULT = 250;
-
-var
-  Response: IHTTPResponse;
-
 
 { TOpenAIIntegration }
 
@@ -106,8 +102,10 @@ end;
 
 destructor TOpenAIIntegration.Destroy;
 begin
+  FMessages.Free;
   Payload.Free;
   Response.Free;
+  inherited Destroy;
 end;
 
 function TOpenAIIntegration.ChatCompletion(APrompt: string; ARole: string
@@ -128,16 +126,16 @@ begin
   msg.Add('content', APrompt.Trim);
   FMessages.Add(msg);
 
-  //TODO: Add previouse messages
-
-  // Payload
+  // Payload: rebuilt on every call (Add on an existing key raises), with a
+  // copy of the history so FMessages stays ours
+  Payload.Clear;
   Payload.Add('model', FModel);
   Payload.Add('max_tokens', FMaxToken);
   Payload.Add('temperature', FTemperature);
-  Payload.Add('messages', FMessages);
+  Payload.Add('messages', TJSONArray(FMessages.Clone));
 
   with THTTPLib.Create(url) do
-  begin
+  try
     OnSyncStatus := FOnSyncStatus;
     AddHeader('_source', 'carik');
     if not FKey.IsEmpty then
@@ -148,12 +146,16 @@ begin
     HttpResultAsText:= HttpResult.ResultText;
     if HttpResult.ResultCode = 200 then
     begin
+      FreeAndNil(Response);
       try
         Response := GetJSON(HttpResultAsText, False);
-        Result := True;
+        Result := Assigned(Response);
       except
       end;
+      if not Assigned(Response) then
+        Response := TJSONObject.Create;
     end;
+  finally
     Free;
   end;
 
@@ -172,13 +174,14 @@ begin
   url := FBaseURL + 'models';
 
   with THTTPLib.Create(url) do
-  begin
+  try
     OnSyncStatus := FOnSyncStatus;
     AddHeader('_source', 'carik');
     if not FKey.IsEmpty then
       AddHeader('Authorization', 'Bearer ' + FKey);
     HttpResult := Get;
     HttpResultAsText := HttpResult.ResultText;
+  finally
     Free;
   end;
 
