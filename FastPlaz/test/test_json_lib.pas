@@ -22,7 +22,8 @@ type
     procedure TestLoadObject;
     procedure TestLoadEmptyStringFails;
     procedure TestLoadInvalidFails;
-    procedure TestLoadArrayRootFails;
+    procedure TestLoadArrayRoot;
+    procedure TestLoadNestedArrayRoot;
     procedure TestLoadResetsModified;
     // reading
     procedure TestGetString;
@@ -122,13 +123,47 @@ begin
   AssertTrue(FJson.IsEmpty);
 end;
 
-procedure TJSONUtilTest.TestLoadArrayRootFails;
+// an array root is accepted (SimpleAI stores button rows this way) and
+// exposed through Data/AsArray; the named accessors are no-ops on it
+procedure TJSONUtilTest.TestLoadArrayRoot;
 begin
-  AssertFalse(FJson.LoadFromJsonString('[1,2]'));
-  AssertTrue(FJson.IsEmpty);
-  // the document must still be usable
+  AssertTrue(FJson.LoadFromJsonString('[1,2]'));
+  AssertTrue(FJson.IsArray);
+  AssertFalse(FJson.IsObject);
+  AssertFalse(FJson.IsEmpty);
+  AssertEquals(2, FJson.Data.Count);
+  AssertEquals(2, FJson.AsArray.Count);
+  AssertEquals('[1, 2]', FJson.AsJSON);
+  AssertEquals(2, integer(FJson['[1]']));
+  AssertNull(FJson.ValueArray['x']);
+  AssertNull(FJson.Item['x']);
+  FJson['x'] := 1;
+  AssertFalse(FJson.Modified);
+  AssertEquals('[1, 2]', FJson.AsJSON);
+  FJson.ValueArray['y'] := TJSONArray.Create([1]);
+  AssertEquals('[1, 2]', FJson.AsJSON);
+  FJson.DeletePath('x');
+  // Clear turns it back into an object document
+  FJson.Clear;
+  AssertTrue(FJson.IsObject);
+  AssertNull(FJson.AsArray);
   FJson['x'] := 1;
   AssertEquals(1, integer(FJson['x']));
+  // a scalar root is still rejected
+  AssertFalse(FJson.LoadFromJsonString('1'));
+  AssertTrue(FJson.IsObject);
+end;
+
+procedure TJSONUtilTest.TestLoadNestedArrayRoot;
+begin
+  AssertTrue(FJson.LoadFromJsonString('[[{"text":"a","callback_data":"x=1"}]]'));
+  AssertEquals('a', FJson.Data.Items[0].Items[0].GetPath('text').AsString);
+  AssertEquals('a', TJSONArray(FJson.Data).Items[0].Items[0].GetPath('text').AsString);
+  AssertEquals('x=1', string(FJson['[0][0].callback_data']));
+  // loading an object afterwards frees the array
+  AssertTrue(FJson.LoadFromJsonString('{"a":1}'));
+  AssertTrue(FJson.IsObject);
+  AssertEquals(1, integer(FJson['a']));
 end;
 
 procedure TJSONUtilTest.TestLoadResetsModified;
