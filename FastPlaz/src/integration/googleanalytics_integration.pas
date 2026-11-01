@@ -7,6 +7,9 @@ file that was distributed with this source code.
 }
 unit googleanalytics_integration;
 
+{ DEPRECATED: Universal Analytics stopped processing hits in 2024. The unit stays for existing callers; every request to the
+  old endpoint fails. }
+
 {
   Google Analytics
   https://analytics.google.com/
@@ -75,7 +78,7 @@ type
     property TrackingID: string read FTrackingID write FTrackingID;
     property ClientID: string read FClientID write FClientID;
     property HitType: string read FHitType write FHitType;
-  end;
+  end deprecated 'Universal Analytics stopped processing hits in 2024';
 
 implementation
 

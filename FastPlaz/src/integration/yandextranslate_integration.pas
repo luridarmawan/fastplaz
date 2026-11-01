@@ -1,5 +1,8 @@
 unit yandextranslate_integration;
 
+{ DEPRECATED: Yandex Translate API v1.5 discontinued. The unit stays for existing callers; every request to the
+  old endpoint fails. }
+
 {
 
 [x] USAGE
@@ -68,7 +71,7 @@ type
     function Translate(ALang, AText: string): string;
   published
     property Cache: boolean read FCache write FCache;
-  end;
+  end deprecated 'Yandex Translate API v1.5 discontinued';
 
 implementation
 

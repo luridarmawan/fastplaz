@@ -10,7 +10,8 @@ unit test_theme_controller;
 interface
 
 uses
-  theme_controller, common, html_lib, fpjson, DateUtils, Classes, SysUtils,
+  theme_controller, common, html_lib, session_controller, fastplaz_handler,
+  fpjson, DateUtils, db, BufDataset, Classes, SysUtils,
   fpcunit, testregistry;
 
 type
@@ -50,6 +51,11 @@ type
     procedure TestCacheTimeStoredAsGiven;
     procedure TestSharedObjectsNotFreedWhenNotOwned;
     procedure TestInstancesKeepTheirOwnVariables;
+    procedure TestForeachNestedJson;
+    procedure TestForeachDatasetStartsAtFirst;
+    procedure TestForeachNestedDatasetJson;
+    procedure TestForeachUnclosedLeftAlone;
+    procedure TestFlashMessagesEscaped;
   end;
 
 implementation
@@ -369,6 +375,137 @@ begin
   // freeing the second instance must not pull the first one's state away
   AssertEquals('1', ThemeUtil.VarValue['a']);
   AssertEquals('t', Render('[if a = 1]t[else]f[/if]'));
+end;
+
+function NewPeople: TBufDataset;
+begin
+  Result := TBufDataset.Create(nil);
+  Result.FieldDefs.Add('name', ftString, 20);
+  Result.FieldDefs.Add('age', ftInteger);
+  Result.CreateDataset;
+  Result.Append; Result.FieldByName('name').AsString := 'Budi'; Result.FieldByName('age').AsInteger := 30; Result.Post;
+  Result.Append; Result.FieldByName('name').AsString := 'Sari'; Result.FieldByName('age').AsInteger := 17; Result.Post;
+end;
+
+// an inner loop over another source inside a json loop; the old regex took
+// the first [/foreach] as the end of the outer block
+procedure TThemeControllerTest.TestForeachNestedJson;
+var
+  people, tags: TJSONArray;
+begin
+  people := TJSONArray.Create;
+  tags := TJSONArray.Create;
+  try
+    people.Add(TJSONObject.Create(['name', 'Budi']));
+    people.Add(TJSONObject.Create(['name', 'Sari']));
+    tags.Add(TJSONObject.Create(['t', 'a']));
+    tags.Add(TJSONObject.Create(['t', 'b']));
+    ThemeUtil.Assign('people', @people);
+    ThemeUtil.Assign('tags', @tags);
+    AssertEquals('Budi:a,b,;Sari:a,b,;',
+      Render('[foreach type=json from=people item=p][p index=name]:'
+        + '[foreach type=json from=tags item=g][g index=t],[/foreach from=tags];'
+        + '[/foreach from=people]'));
+  finally
+    people.Free;
+    tags.Free;
+  end;
+end;
+
+// the cursor is moved to the first row before the loop: a dataset left at
+// EOF (or on the last row) rendered nothing
+procedure TThemeControllerTest.TestForeachDatasetStartsAtFirst;
+var
+  ds: TBufDataset;
+begin
+  ds := NewPeople;
+  try
+    ds.Last;
+    ds.Next; // EOF
+    ThemeUtil.Assign('people', @ds);
+    // dataset rows are rendered one by one and each ends with a line break
+    AssertEquals('<li>Budi</li><li>Sari</li>',
+      Render('[foreach type=dataset from=people item=p]<li>[p index=name]</li>[/foreach from=people]').Replace(#13, '').Replace(#10, ''));
+    // and again, the cursor is at EOF after the first render
+    AssertEquals('<li>Budi</li><li>Sari</li>',
+      Render('[foreach type=dataset from=people item=p]<li>[p index=name]</li>[/foreach from=people]').Replace(#13, '').Replace(#10, ''));
+  finally
+    ds.Free;
+  end;
+end;
+
+procedure TThemeControllerTest.TestForeachNestedDatasetJson;
+var
+  ds: TBufDataset;
+  tags: TJSONArray;
+begin
+  ds := NewPeople;
+  tags := TJSONArray.Create;
+  try
+    tags.Add(TJSONObject.Create(['t', 'x']));
+    ThemeUtil.Assign('people', @ds);
+    ThemeUtil.Assign('tags', @tags);
+    AssertEquals('Budi[x]Sari[x]',
+      Render('[foreach type=dataset from=people item=p][p index=name]'
+        + '[foreach type=json from=tags item=g]<[g index=t]>[/foreach from=tags]'
+        + '[/foreach from=people]').Replace('<', '[').Replace('>', ']').Replace(#13, '').Replace(#10, ''));
+  finally
+    ds.Free;
+    tags.Free;
+  end;
+end;
+
+procedure TThemeControllerTest.TestForeachUnclosedLeftAlone;
+var
+  tags: TJSONArray;
+begin
+  tags := TJSONArray.Create;
+  try
+    tags.Add(TJSONObject.Create(['t', 'x']));
+    ThemeUtil.Assign('tags', @tags);
+    AssertTrue(Pos('[foreach type=json from=tags item=g]',
+      Render('a [foreach type=json from=tags item=g][g index=t] b')) > 0);
+    // an unknown source expands to nothing
+    AssertEquals('ab', Render('a[foreach type=json from=nope item=g]x[/foreach from=nope]b'));
+  finally
+    tags.Free;
+  end;
+end;
+
+// [flashmessages] used to print the messages as HTML
+procedure TThemeControllerTest.TestFlashMessagesEscaped;
+var
+  dir, oldDir, html: string;
+begin
+  dir := IncludeTrailingPathDelimiter(GetTempDir) + 'fastplaz_theme_flash_' +
+    IntToStr(GetProcessID) + PathDelim;
+  ForceDirectories(dir);
+  oldDir := SessionController.SessionDir;
+  _SetEnv('HTTP_COOKIE', '');
+  _SetEnv('HTTP_USER_AGENT', 'fastplaz-theme-test');
+  _SetEnv('REMOTE_ADDR', '127.0.0.1');
+  SessionController.SessionDir := dir;
+  try
+    AssertTrue(SessionController.StartSession);
+    ThemeUtil.FlashMessages := '<b>bold</b> & "quoted"';
+    html := Render('[flashmessages class="x"]');
+    AssertTrue(html, Pos('<li>&lt;b&gt;bold&lt;/b&gt; &amp; &quot;quoted&quot;</li>', html) > 0);
+    AssertTrue(Pos('<b>bold</b>', html) = 0);
+    // read once: the next render has nothing to show
+    AssertEquals('', Render('[flashmessages]'));
+    // html=1 keeps the markup for trusted messages
+    ThemeUtil.FlashMessages := 'a<br>b';
+    html := Render('[flashmessages html=1]');
+    AssertTrue(html, Pos('<li>a<br>b</li>', html) > 0);
+  finally
+    try
+      SessionController.EndSession(True);
+    except
+    end;
+    SessionController.SessionDir := oldDir;
+    _SetEnv('HTTP_COOKIE', '');
+    RemoveDir(ExcludeTrailingPathDelimiter(dir));
+  end;
 end;
 
 initialization

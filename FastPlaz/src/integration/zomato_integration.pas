@@ -1,5 +1,8 @@
 unit zomato_integration;
 
+{ DEPRECATED: Zomato public API discontinued. The unit stays for existing callers; every request to the
+  old endpoint fails. }
+
 {
 
 
@@ -55,7 +58,7 @@ type
       ALon: double = 0; ACount: integer = 5): string;
     function Search(AKeyword: string; ALat: double = 0; ALon: double = 0;
       ACount: integer = 4): string;
-  end;
+  end deprecated 'Zomato public API discontinued';
 
 implementation
 

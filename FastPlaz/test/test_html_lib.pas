@@ -18,6 +18,7 @@ type
     procedure SetUp; override;
     procedure TearDown; override;
   published
+    procedure TestReCaptchaAlwaysV2;
     procedure TestHTMLEncode;
     procedure TestStripTagsSimple;
     procedure TestStripTagsGreaterThanInText;
@@ -200,6 +201,26 @@ begin
   AssertEquals(__HTML_CSRF_TOKEN_KEY, CsrfSessionKey(''));
   AssertEquals(__HTML_CSRF_TOKEN_KEY + ':f1', CsrfSessionKey('f1'));
   AssertTrue(CsrfSessionKey('a') <> CsrfSessionKey('b'));
+end;
+
+// the v1 API was shut down in 2018: every version renders the v2 widget
+procedure THTMLLibTest.TestReCaptchaAlwaysV2;
+var
+  h: THTMLUtil;
+  v1, v2: string;
+begin
+  h := THTMLUtil.Create;
+  try
+    v1 := h.ReCaptcha('key"x', 'v1');
+    v2 := h.ReCaptcha('key"x', 'v2');
+    AssertEquals(v2, v1);
+    AssertTrue(Pos('class="g-recaptcha"', v1) > 0);
+    AssertTrue(Pos('data-sitekey="key&quot;x"', v1) > 0);
+    AssertTrue(Pos('api/challenge', v1) = 0);
+    AssertTrue(Pos('recaptcha_version', v1) = 0);
+  finally
+    h.Free;
+  end;
 end;
 
 initialization

@@ -1,5 +1,8 @@
 unit newrelic_integration;
 
+{ DEPRECATED: New Relic deployments.xml v1 API retired. The unit stays for existing callers; every request to the
+  old endpoint fails. }
+
 {$mode objfpc}{$H+}
 { $include ../../define.inc}
 
@@ -43,7 +46,7 @@ type
     property ChangeLog: string read FChangeLog write FChangeLog;
     property User: string read FUser write FUser;
     property IsSuccessfull: boolean read FIsSuccessfull;
-  end;
+  end deprecated 'New Relic deployments.xml v1 API retired';
 
 implementation
 

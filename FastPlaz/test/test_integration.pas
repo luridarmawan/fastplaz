@@ -13,7 +13,7 @@ uses
   telegram_integration, facebookmessenger_integration, line_integration,
   whois_integration, graphql_integration, slack_integration,
   botframework_integration, elasticsearch_integration, openai_integration,
-  firebase_integration, googleanalytics_integration, googleplacesearch_integration,
+  firebase_integration, googleplacesearch_integration,
   json_lib, fpjson, Classes, SysUtils, fpcunit, testregistry;
 
 type
@@ -652,7 +652,6 @@ begin
     TElasticSearchIntegration.Create.Free;
     TOpenAIIntegration.Create.Free;
     TFirebaseIntegration.Create.Free;
-    TGoogleAnalyticsIntegration.Create.Free;
     TGooglePlaceIntegration.Create.Free;
   end;
   AssertTrue(True);

@@ -570,31 +570,12 @@ begin
   Result := '<a href="' + HTMLEncode(URL) + '"' + s + '>' + HTMLEncode(Text) + '</a>';
 end;
 
+// The reCAPTCHA v2 widget. Version is kept for compatibility: the v1 API
+// was shut down in 2018, so every version renders the v2 markup.
 function THTMLUtil.ReCaptcha(const PublicKey: string; const Version: string): string;
 begin
-  if Version = 'v2' then
-  begin
-    Result := #13'<div class="g-recaptcha" data-sitekey="' + HTMLEncode(PublicKey) +
-      '"></div>' + #13'<script src="https://www.google.com/recaptcha/api.js?hl=en"></script>';
-  end
-  else
-  begin
-    Result := ''
-
-      //    + #13'<script type="text/javascript">'
-      //    + #13'var RecaptchaOptions = {'
-      //    + #13'  theme : "clean",'
-      //    + #13'  lang : "en",'
-      //    + #13'  custom_translations : {'
-      //    + #13'  },'
-      //    + #13'  tabindex : 0'
-      //    + #13'};'
-      //    + #13'</script>'
-
-      + #13'<input type="hidden" name="recaptcha_version" value="' +
-      HTMLEncode(Version) + '"/>' + #13'<script type="text/javascript" src="https://www.google.com/recaptcha/api/challenge?hl=en&amp;k='
-      + HTMLEncode(PublicKey) + '">' + #13'</script>';
-  end;
+  Result := #13'<div class="g-recaptcha" data-sitekey="' + HTMLEncode(PublicKey) +
+    '"></div>' + #13'<script src="https://www.google.com/recaptcha/api.js?hl=en"></script>';
 end;
 
 function THTMLUtil.Permalink(Title: string): string;

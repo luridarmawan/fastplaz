@@ -36,6 +36,7 @@ type
     procedure SetUp; override;
     procedure TearDown; override;
   published
+    procedure TestReservedTableNameIsQuoted;
     procedure TestConnected;
     procedure TestFieldListFromSqlite;
     procedure TestSaveInsertAndLastInsertID;
@@ -165,6 +166,39 @@ begin
   if FileExists(FDbFile) then
     DeleteFile(FDbFile);
   RemoveDir(ExcludeTrailingPathDelimiter(FDir));
+end;
+
+// generated SQL quotes the table and its alias: "order" (and "groups" on
+// MySQL 8) are reserved words
+procedure TSimpleModelSQLiteTest.TestReservedTableNameIsQuoted;
+var
+  m: TSimpleModel;
+begin
+  Exec('CREATE TABLE "order"(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)');
+  m := TSimpleModel.Create('order', 'id');
+  try
+    AssertEquals('`order`', m.QuotedTableName);
+    AssertEquals('`order`', m.QuotedAliasName);
+    AssertEquals('`db`.`t`', m.QuoteIdentifier('db.t'));
+    AssertEquals('t u', m.QuoteIdentifier('t u'));
+    AssertEquals('`t`', m.QuoteIdentifier('`t`'));
+    AssertEquals('', m.QuoteIdentifier(''));
+    m.New;
+    m['name'] := 'x';
+    AssertTrue(m.Save);
+    AssertTrue(m.Find([]));
+    AssertEquals(1, m.RecordCount);
+    AssertEquals('x', string(m['name']));
+    AssertTrue(m.SQL.Text, Pos('FROM `order` `order`', m.SQL.Text) > 0);
+    AssertTrue(m.SQL.Text, Pos('`order`.name', m.SQL.Text) > 0);
+    AssertTrue(m.Find(['name=''x''']));
+    AssertTrue(m.GetAll);
+    AssertEquals(1, m.RecordCount);
+    AssertTrue(m.Delete('id=1'));
+    AssertFalse(m.Find([]));
+  finally
+    m.Free;
+  end;
 end;
 
 procedure TSimpleModelSQLiteTest.TestConnected;
