@@ -22,6 +22,7 @@ Each test project is a standalone console program, so it can be run without inst
 * FPC / Free Pascal Compiler, version 3.2.2
 * Lazarus (for `lazbuild`), optional when using `instantfpc`
 * A Redis server for the `TRedisLibServerTest` suite, optional (see [Redis tests](#redis-tests))
+* The SQLite client library (`sqlite3.dll` / `libsqlite3.so`) for the `TSimpleModelSQLiteTest` suite, optional: the run scripts look in `PATH` and a few known folders (HeidiSQL, `C:\sqlite`, the usual Linux/macOS library paths) and the suite is ignored when it is missing. Set `SQLITE3_LIBRARY` to the library file to use a specific one.
 
 ### Quick run with instantfpc
 
@@ -192,6 +193,7 @@ Setiap project test adalah program console mandiri, sehingga bisa dijalankan tan
 * FPC / Free Pascal Compiler, versi 3.2.2
 * Lazarus (untuk `lazbuild`), opsional jika memakai `instantfpc`
 * Server Redis untuk suite `TRedisLibServerTest`, opsional (lihat [Test Redis](#test-redis))
+* Library klien SQLite (`sqlite3.dll` / `libsqlite3.so`) untuk suite `TSimpleModelSQLiteTest`, opsional: skrip run mencarinya di `PATH` dan beberapa folder umum (HeidiSQL, `C:\sqlite`, path library Linux/macOS yang lazim) dan suite ini di-ignore bila tidak ada. Set `SQLITE3_LIBRARY` ke file library untuk memakai yang spesifik.
 
 ### Jalankan cepat dengan instantfpc
 
