@@ -11,7 +11,7 @@ uses
   Classes, SysUtils, fpcgi, HTTPDefs;
 
 const
-  NOTIFICATION_ROUTE_REGEX = '^(notification)/?$'; ---
+  NOTIFICATION_ROUTE_REGEX = '^(notification)/?$';
   NOTIFICATION_TITLE = 'Notification';
   NOTIFICATION_DESCRIPTION = 'Notification Controller';
   NOTIFICATION_URL = 'notification';
@@ -123,6 +123,5 @@ initialization
   Add this to route.pas
   Route.Add( NOTIFICATION_ROUTE_REGEX, TNotificationModule);
 }
-  Route.Add(NOTIFICATION_ROUTE_REGEX, TNotificationModule);
 
 end.
