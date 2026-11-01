@@ -219,8 +219,6 @@ begin
     Exit;
 
   log('Find something about "' + currentLine + '"');
-  if not Assigned(fFastCodeConfiguration) then
-    fFastCodeConfiguration := TfFastCodeConfiguration.Create(nil);
   GetFastCodeSuggestion(currentLine);
 end;
 
