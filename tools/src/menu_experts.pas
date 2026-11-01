@@ -20,6 +20,7 @@ var
   icRevealInFinder: TIDECommand;
   icCopyFilePath: TIDECommand;
   icCopyDirectoryPath: TIDECommand;
+  icOpenTerminalFromHere: TIDECommand;
   icFastCode: TIDECommand;
 
 procedure CreateIDEMenus;
@@ -262,6 +263,116 @@ begin
   fRegex.Show;
 end;
 
+// Directory of the active project; falls back to the active editor file
+// when the project has not been saved yet.
+function ActiveProjectDirectory: string;
+var
+  srcEdit: TSourceEditorInterface;
+begin
+  Result := '';
+  if Assigned(LazarusIDE.ActiveProject) then
+    Result := ExtractFileDir(LazarusIDE.ActiveProject.ProjectInfoFile);
+  if (Result = '') or not DirectoryExists(Result) then
+  begin
+    Result := '';
+    srcEdit := SourceEditorManagerIntf.ActiveEditor;
+    if Assigned(srcEdit) and FileExists(srcEdit.FileName) then
+      Result := ExtractFileDir(srcEdit.FileName);
+  end;
+end;
+
+{$if not defined(WINDOWS) and not defined(DARWIN)}
+// First terminal emulator found: $TERMINAL, then the common ones.
+function FindTerminalExecutable: string;
+const
+  TERMINALS: array[0..8] of string = ('x-terminal-emulator', 'gnome-terminal',
+    'konsole', 'xfce4-terminal', 'mate-terminal', 'lxterminal', 'tilix',
+    'kitty', 'xterm');
+var
+  envPath, terminalName: string;
+begin
+  envPath := GetEnvironmentVariable('PATH');
+  terminalName := GetEnvironmentVariable('TERMINAL');
+  if terminalName <> '' then
+  begin
+    Result := ExeSearch(terminalName, envPath);
+    if Result <> '' then
+      Exit;
+  end;
+  for terminalName in TERMINALS do
+  begin
+    Result := ExeSearch(terminalName, envPath);
+    if Result <> '' then
+      Exit;
+  end;
+  Result := '';
+end;
+{$endif}
+
+// Opens the platform terminal with ADirectory as its working directory:
+// cmd.exe on Windows, Terminal.app on macOS, the default emulator elsewhere.
+procedure OpenTerminalIn(const ADirectory: string);
+var
+  directory: string;
+  terminal: TProcessUTF8;
+begin
+  directory := ADirectory;
+  if (directory = '') or not DirectoryExists(directory) then
+  begin
+    ShowMessage(RS_OPEN_TERMINAL_NO_DIRECTORY);
+    Exit;
+  end;
+
+  terminal := TProcessUTF8.Create(nil);
+  try
+    try
+      terminal.CurrentDirectory := directory;
+      {$if defined(WINDOWS)}
+      terminal.Executable := GetEnvironmentVariable('COMSPEC');
+      if terminal.Executable = '' then
+        terminal.Executable := 'cmd.exe';
+      terminal.Options := [poNewConsole];
+      {$elseif defined(DARWIN)}
+      terminal.Executable := 'open';
+      terminal.Parameters.Add('-a');
+      terminal.Parameters.Add('Terminal');
+      terminal.Parameters.Add(directory);
+      {$else}
+      terminal.Executable := FindTerminalExecutable;
+      if terminal.Executable = '' then
+      begin
+        ShowMessage(RS_OPEN_TERMINAL_NOT_FOUND);
+        Exit;
+      end;
+      {$endif}
+      terminal.Execute;
+    except
+      on E: Exception do
+        ShowMessage(E.Message);
+    end;
+  finally
+    terminal.Free;
+  end;
+end;
+
+procedure OpenTerminal_Proc(ASender: TObject);
+begin
+  OpenTerminalIn(ActiveProjectDirectory);
+end;
+
+procedure OpenTerminalFromHere_Proc(ASender: TObject);
+var
+  srcEdit: TSourceEditorInterface;
+begin
+  srcEdit := SourceEditorManagerIntf.ActiveEditor;
+  if (srcEdit = nil) or not FileExists(srcEdit.FileName) then
+  begin
+    ShowMessage(RS_OPEN_TERMINAL_NO_DIRECTORY);
+    Exit;
+  end;
+  OpenTerminalIn(ExtractFileDir(srcEdit.FileName));
+end;
+
 procedure About_Proc(ASender: TObject);
 begin
   if fAboutFastplaz = nil then
@@ -301,6 +412,8 @@ begin
     RS_JSON_TOOLS_MENU, nil, @JSONTools_Proc, nil);
   RegisterIDEMenuCommand(oMenuExpert, 'mnu_FastPlaz_RegexTester',
     RS_REGEX_TESTER_MENU, nil, @RegexTester_Proc, nil);
+  RegisterIDEMenuCommand(oMenuExpert, 'mnu_FastPlaz_OpenTerminal',
+    RS_OPEN_TERMINAL_MENU, nil, @OpenTerminal_Proc, nil);
   CreateIDEMenuSeparator(oMenuExpert);
   RegisterIDEMenuCommand(oMenuExpert, 'mnu_FastPlaz_FastCodeConfiguration',
     RS_FAST_CODE_CONFIGURATION, nil, @FastCodeConfiguration_Proc, nil);
@@ -336,6 +449,11 @@ begin
   icCopyDirectoryPath := RegisterIDECommand(cat, rsCopyDirectoryPath,
     rsCopyDirectoryPath, copyDirectoryKey, nil, @CopyDirectoryPath_Proc);
 
+  // open terminal in the directory of the active file (no default shortcut)
+  icOpenTerminalFromHere := RegisterIDECommand(cat, rsOpenTerminalFromHere,
+    rsOpenTerminalFromHere, IDEShortCut(VK_UNKNOWN, [], VK_UNKNOWN, []), nil,
+    @OpenTerminalFromHere_Proc);
+
   // add a menu item in the source editor
   RegisterIDEMenuCommand(SrcEditMenuSectionFirstStatic, 'RevealInFinder',
     rsRevealInFinder, nil, nil, icRevealInFinder, 'reveal_in_finder');
@@ -343,6 +461,8 @@ begin
     rsCopyFilePath, nil, nil, icCopyFilePath, 'copy_file_path');
   RegisterIDEMenuCommand(SrcEditMenuSectionFirstStatic, 'CopyDirectoryPath',
     rsCopyDirectoryPath, nil, nil, icCopyDirectoryPath, 'copy_directory_path');
+  RegisterIDEMenuCommand(SrcEditMenuSectionFirstStatic, 'OpenTerminalFromHere',
+    rsOpenTerminalFromHere, nil, nil, icOpenTerminalFromHere);
 
   // FAST CODE ---
   key := IDEShortCut(VK_O, [ssCtrl, ssAlt], VK_UNKNOWN, []);

@@ -71,6 +71,7 @@ const
   {$endif}
   rsCopyFilePath = 'Copy File Path';
   rsCopyDirectoryPath = 'Copy Directory Path';
+  rsOpenTerminalFromHere = 'Open Terminal from Here';
 
   FASTCODE_PROMPT = 'You are an expert Pascal programmer. Please answer with specific code. Start description with //. Dont use markdown, and a maximum length of 80 characters per line in description. Only give responses in the %language% language.';
   FASTCODE_OPENING_CHAR = '{';
@@ -87,6 +88,9 @@ resourcestring
   RS_DATABASE_EXPLORER_MENU = 'Database Explorer';
   RS_JSON_TOOLS_MENU = 'JSON Validator && Formatter';
   RS_REGEX_TESTER_MENU = 'Regex Tester';
+  RS_OPEN_TERMINAL_MENU = 'Open Console/Terminal';
+  RS_OPEN_TERMINAL_NO_DIRECTORY = 'No saved project or file is open, nothing to open the terminal in.';
+  RS_OPEN_TERMINAL_NOT_FOUND = 'No terminal application found. Set the TERMINAL environment variable.';
   RS_THERE_ARE_DEVELOPMENT_UPDATE = 'There are development update: ';
   rsDBExplorer = 'DB Explorer';
   rsViewDBConnector = 'View DB Connector';
