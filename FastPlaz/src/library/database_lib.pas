@@ -90,6 +90,13 @@ type
     destructor Destroy; override;
     procedure SetFieldValue( FieldName: String; AValue: Variant);
     property TableName : string Read FTableName write FTableName;
+    // TableName/AliasName as identifiers for the active connector:
+    // `db`.`groups` on MySQL and SQLite, "db"."groups" on PostgreSQL. A
+    // name that already carries a quote, a space or a parenthesis is used
+    // as given.
+    function QuoteIdentifier(const AName: string): string;
+    function QuotedTableName: string;
+    function QuotedAliasName: string;
     property TablePrefix : string read GetTablePrefix;
     property FieldPrefix: string read FFieldPrefix write FFieldPrefix;
     property FieldQuote: string read FFieldQuote write FFieldQuote;
@@ -754,6 +761,41 @@ begin
   Result := AppData.tablePrefix;
 end;
 
+function TSimpleModel.QuoteIdentifier(const AName: string): string;
+var
+  q: string;
+  parts: TStringArray;
+  i: integer;
+begin
+  Result := AName;
+  if AName = '' then
+    Exit;
+  q := FFieldQuote;
+  if (q = '`') and Assigned(FConnector)
+    and (Pos('postgre', LowerCase(FConnector.ConnectorType)) > 0) then
+    q := '"';
+  if (q = '') or (Pos(q, AName) > 0) or (Pos(' ', AName) > 0) or (Pos('(', AName) > 0) then
+    Exit;
+  parts := AName.Split(['.']);
+  Result := '';
+  for i := 0 to Length(parts) - 1 do
+  begin
+    if i > 0 then
+      Result := Result + '.';
+    Result := Result + q + parts[i] + q;
+  end;
+end;
+
+function TSimpleModel.QuotedTableName: string;
+begin
+  Result := QuoteIdentifier(FTableName);
+end;
+
+function TSimpleModel.QuotedAliasName: string;
+begin
+  Result := QuoteIdentifier(FAliasName);
+end;
+
 procedure TSimpleModel.setAliasName(AValue: string);
 begin
   FAliasName := AValue;
@@ -841,7 +883,7 @@ end;
 
 function TSimpleModel.getFieldList_mysql: TStrings;
 begin
-  Data.SQL.Text:= 'SHOW COLUMNS FROM ' + FTableName;
+  Data.SQL.Text:= 'SHOW COLUMNS FROM ' + QuotedTableName;
   Data.Open;
   FSelectField := '';
   while not Data.Eof do begin
@@ -856,7 +898,7 @@ end;
 
 function TSimpleModel.getFieldList_sqlite: TStrings;
 begin
-  Data.SQL.Text:= 'PRAGMA table_info('+FTableName+');';
+  Data.SQL.Text:= 'PRAGMA table_info('+QuotedTableName+');';
   Data.Open;
   FSelectField := '';
   while not Data.Eof do begin
@@ -1040,9 +1082,10 @@ function TSimpleModel.GetAll(Limit: Integer; Offset: Integer;
   const AUniDirectional: boolean): boolean;
 begin
   _queryPrepare;
-  Data.SQL.Text := 'SELECT ' + FSelectField + ' FROM ' + FTableName;
+  Data.SQL.Text := 'SELECT ' + FSelectField.Replace(FTableName + '.', QuotedTableName + '.')
+    + ' FROM ' + QuotedTableName;
   if FUseSoftDelete and (Trim(FSoftDeleteField) <> '') then
-    Data.SQL.Add('WHERE ' + FTableName + '.' + FSoftDeleteField + '=0');
+    Data.SQL.Add('WHERE ' + QuotedTableName + '.' + FSoftDeleteField + '=0');
   if Limit > 0 then
     Data.SQL.Add('LIMIT ' + i2s(Limit));
   if Offset > 0 then
@@ -1163,17 +1206,15 @@ begin
   if FUseSoftDelete and (Trim(FSoftDeleteField) <> '') then
   begin
     if sWhere = '' then
-      sWhere := FAliasName + '.' + FSoftDeleteField + '=0'
+      sWhere := QuotedAliasName + '.' + FSoftDeleteField + '=0'
     else
-      sWhere := '(' + sWhere + ') AND ' + FAliasName + '.' + FSoftDeleteField + '=0';
+      sWhere := '(' + sWhere + ') AND ' + QuotedAliasName + '.' + FSoftDeleteField + '=0';
   end;
   if CustomField = '' then begin
     _queryPrepare;
-    _selectField := FSelectField;
-    // the FROM clause aliases the table, so the generated field list has to
-    // use the alias too (AliasName set, or a schema-qualified table "db.users")
-    if FAliasName <> FTableName then
-      _selectField := _selectField.Replace( FTableName + '.', FAliasName + '.');
+    // the FROM clause aliases the table, so the generated field list uses
+    // the (quoted) alias: "groups" is a reserved word on MySQL 8
+    _selectField := FSelectField.Replace( FTableName + '.', QuotedAliasName + '.');
   end else begin
     _selectField:= CustomField;
   end;
@@ -1200,7 +1241,7 @@ begin
     end;
   end;
   // prepare join - end
-  Data.SQL.Text := 'SELECT ' + _selectField + #13#10'FROM ' + FTableName + ' ' + FAliasName + _joinSQL;
+  Data.SQL.Text := 'SELECT ' + _selectField + #13#10'FROM ' + QuotedTableName + ' ' + QuotedAliasName + _joinSQL;
 
   if sWhere <> '' then
     Data.SQL.Add( 'WHERE ' + sWhere);
@@ -1365,7 +1406,7 @@ begin
   sSQL := TStringList.Create;
   if Where <> '' then
   begin
-    sSQL.Add( 'UPDATE ' + TableName + ' SET ');
+    sSQL.Add( 'UPDATE ' + QuotedTableName + ' SET ');
     for i:=0 to FGenFields.Count-1 do
     begin
       s := FFieldQuote + FGenFields[i] + FFieldQuote +'=:'+FGenFields[i];
@@ -1377,7 +1418,7 @@ begin
   end
   else
   begin //-- new data
-    sSQL.Add( 'INSERT INTO '+TableName+' (');
+    sSQL.Add( 'INSERT INTO '+QuotedTableName+' (');
     s := '';
     for i:= 0 to FGenFields.Count-1 do
     begin
@@ -1455,7 +1496,7 @@ begin
     end;
   end;
 
-  s := 'DELETE FROM ' + TableName + ' WHERE ';
+  s := 'DELETE FROM ' + QuotedTableName + ' WHERE ';
   if Where = '' then
   begin
     s:= s + primaryKey + '=' + QuotedStr( primaryKeyValue);
@@ -1536,7 +1577,7 @@ begin
       Exit;
     end;
   end;
-  s := 'UPDATE ' + TableName + ' SET ' + FFieldQuote + FSoftDeleteField + FFieldQuote + '=1 WHERE ';
+  s := 'UPDATE ' + QuotedTableName + ' SET ' + FFieldQuote + FSoftDeleteField + FFieldQuote + '=1 WHERE ';
   if Where = '' then
     s := s + primaryKey + '=' + QuotedStr( primaryKeyValue)
   else
@@ -1633,7 +1674,7 @@ begin
   if Trim(FScriptFieldNames) = '' then
     FScriptFieldNames := '*';
   Data.SQL.Text := 'SELECT ' + FScriptFieldNames;
-  Data.SQL.Add( 'FROM ' + FTableName);
+  Data.SQL.Add( 'FROM ' + QuotedTableName);
   if FScriptWhere <> '' then
     Data.SQL.Add( 'WHERE ' + FScriptWhere);
   if FScriptOrderBy <> '' then
