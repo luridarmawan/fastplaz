@@ -30,9 +30,6 @@ type
       DefaultValue: string = ''): variant;
     function SetCustom(const ModuleName: string; const VariableName: string;
       const ValueOfVariable: string): boolean;
-    // SQL string literal for the active connector (single quotes doubled,
-    // backslashes doubled for MySQL)
-    function QuoteValue(const AValue: string): string;
   private
     function WhereModuleVariable(const ModuleName, VariableName: string): TStringArray;
   end;
@@ -43,16 +40,6 @@ constructor TModvarModel.Create(const DefaultTableName: string = '');
 begin
   inherited Create(MODVAR_TABLE_NAME); // table name = module_vars
   primaryKey := MODVAR_PRIMARY_KEY;
-end;
-
-function TModvarModel.QuoteValue(const AValue: string): string;
-var
-  s: string;
-begin
-  s := AValue;
-  if Assigned(Connector) and (Pos('mysql', LowerCase(Connector.ConnectorType)) > 0) then
-    s := StringReplace(s, '\', '\\', [rfReplaceAll]);
-  Result := QuotedStr(s);
 end;
 
 function TModvarModel.WhereModuleVariable(const ModuleName, VariableName: string): TStringArray;
