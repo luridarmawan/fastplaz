@@ -474,22 +474,9 @@ begin
   if SessionController.TimeOut = 0 then
     SessionController.TimeOut := _SESSION_TIMEOUT_DEFAULT;
   // force session with cookie
+  SessionController.CookiePath := AppData.cookiePath;
   if SessionController.IsNewSession then
-  begin
-    with Application.Response.Cookies.Add do
-    begin
-      //CustomHeader['Set-Cookie'] := '_=....; path=/';
-      Name := _SESSION_COOKIE_KEY;
-      Value := SessionController.CookieID;
-      Path := '/';
-      if not AppData.cookiePath.IsEmpty then
-        Path := AppData.cookiePath;
-      HttpOnly := True;
-      SameSite := ssLax;
-      Secure := (GetEnvironmentVariable('HTTPS') = 'on');
-      //Expires := dateutils.IncMinute(Now, SessionController.TimeOut);
-    end;
-  end;
+    SessionController.SendCookie;
   if AppData.SessionStorage = _SESSION_STORAGE_DATABASE then
   begin
     DataBaseInit;
