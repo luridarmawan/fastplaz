@@ -14,7 +14,7 @@ Each test project is a standalone console program, so it can be run without inst
 
 | Project | Location | What is tested |
 | --- | --- | --- |
-| `regex_tester_test` | `tools/src/test` | `regex_tester_lib` – logic behind the *Regex Tester* tool and the `REGEX_*` constants |
+| `tools_test` | `tools/src/test` | `regex_tester_lib` – logic behind the *Regex Tester* tool and the `REGEX_*` constants; `tools_lib` – name sanitising, template copy, `.htaccess`, model names and FastCode response helpers shared by the IDE wizards |
 | `fastplaz_test` | `FastPlaz/test` | `datetime_lib` – `DateTimeHuman()`, `DateTimeHumanAt()` and the date string parser `TryParseHumanDate()`<br>`redis_lib` – `TRedisLib`: configuration, RESP replies, SET/GET, timeout and reconnect (see [Redis tests](#redis-tests))<br>`json_lib` – `TJSONUtil`: loading, path access, typed values, arrays and items<br>`config_lib` – `TMyConfig`: `ValidateFile()`, `Value[]`, `GetObject()` and `SetDataValue()`<br>`common` – base64, `HTMLDecode()`, `StripHTML()`, `RandomString()`, `isIPAddress()` and string helpers<br>`math_lib` – `Fact()`, `Power()`, `Choose()` and `Stirling()` including invalid arguments<br>`http_lib` – multipart body (`HTTPMultipartEncode()`), `FormData[]`, `RequestBody` ownership, `Clear()` and `THTTPResponse`<br>`mailer_lib` – `FormatMailAddress()`, `SanitizeMailHeader()`, To/Cc/Bcc lists and `Send()` without mailer support<br>`logutil_lib` – `TLogUtil.Add()`: file creation, append, module name, skip, one line per entry and `Prefix`<br>`smtp_lib` – `TSMTPClient` against an in-process fake SMTP server (EHLO, AUTH PLAIN, RCPT, DATA, QUIT, error paths) and the message builders<br>`stemmingnazief_lib` – `TStemmingNazief`: dictionary loading, prefix/suffix/plural rules, numbers, non-standard words, termination on unknown words and JSON output<br>`html_lib` – `HTMLEncode()`, `StripTags()`, `MoreLess()`, the escaped form/link helpers and the `ReCaptcha()` v2 widget<br>`recaptcha_lib` – `TReCaptcha`: siteverify response parsing and the verification request (fields, token with `&`, errors) through an overridable transport<br>`rss_lib` – `TRSSReaderLib`: RSS 2.0, RSS 1.0 and Atom parsing, item filtering, image fallbacks, malformed input and failed fetches<br>`solr_lib` – `TSOLRModel`: URL building and encoding, result iteration, empty results, HTTP/Solr/JSON errors through an overridable request<br>`serialize_lib` – `serialize()`/`unserialize()`: PHP format, legacy FastPlaz format, every variant type, malformed and oversized input, round trips<br>`verbal_expressions_lib` – `TVerbalExpressions`: Digit/word/Tab/LineBreak, SomethingBut, escaping inside character classes, literal Replace, modifiers<br>`nlp_lib` – `TNLP.Similarity()`: bounded cosine score, empty input, stop words, list assignment<br>`image_lib` – `TImageLib`: PNG/JPEG loading, wrong content, resize (aspect, stretch, invalid sizes), saving, `AsStream` reuse<br>`language_lib` – `__()` and `LoadPOFile()`: exact matching, escapes, multi-line entries, fallback language, cache reload<br>`database_lib` – `TSimpleModel` against a temporary SQLite database: field list, Save/Update/Delete/SoftDelete, Find, All, JSON output, query helpers, quoted table and alias names (`QuoteIdentifier()`), failed Save/Delete return False with `Message` (ignored when the SQLite library cannot be loaded, see `SQLITE3_LIBRARY`)<br>`session_controller` – `TSessionController`: cookie/session id, file storage round trips, value encoding, timeout in minutes, expiry wipe, end/restart, `RegenerateID()`, start again after a forced `EndSession()`; database storage against SQLite (parameterised SQL, untrusted `X-Forwarded-For`)<br>`theme_controller` – `TThemeUtil`: the `[if] [else] [/if]` processor (operators, nesting, multi-line HTML, quoted values, unknown variables, inside a JSON foreach), the escape/date filters, whitespace trimming, cache time, instance state and shared object ownership, `SafeTemplateName()`, nested `[foreach]` blocks and the dataset cursor reset, HTML-encoded `[flashmessages]`<br>`fastplaz_handler` – `SanitizeHeaderValue()`, `HeaderToEnvName()` and the request accessors created at startup<br>`string_helpers`, `datetime_helpers`, `json_helpers`, `array_helpers`, `integer_helpers` – the type helpers (date parsing, diffs, unix time, JSON by name, delimited arrays)<br>`modvar_model`/`modvar_util` – `ModVar[]` against SQLite: set/get, update in place, quotes in names, NULL values, `QuoteValue()`<br>`telegram_integration`, `facebookmessenger_integration`, `line_integration` – update/webhook parsing (messages, callback queries, postbacks, groups), keyboard payloads built from a copy of the rows, per-instance payload handlers, `TLineTemplateMessage` JSON, calls without token/file return False<br>`whois_integration`, `graphql_integration`, `slack_integration`, `botframework_integration`, `elasticsearch_integration`, `openai_integration` – `ExtensionOf()`, escaped request bodies, `ServiceURL` slash, URL building, payload rebuilt per call; every integration class is created and freed (destructors run)<br>`security_util`, `grouppermission_model`, `user_model`/`user_util`, `group_model`/`group_util`, `permission_util` (src/cms) – salted hash round trip, password/e-mail rules, `TimingSafeEquals()`, `FixSecurityString()`, and against SQLite: add/lookup, quotes not injected, change password, activate/suspend/delete, groups and membership counter, permission levels incl. `ANY`, login/logout on the session; every cms and app controller is compiled |
 
 ### Prerequisites
@@ -82,14 +82,14 @@ Windows:
 
 ```bat
 cd tools\src\test
-C:\lazarus\lazbuild.exe regex_tester_test.lpi
+C:\lazarus\lazbuild.exe tools_test.lpi
 ```
 
 Linux / macOS (`lazbuild` in `PATH`):
 
 ```bash
 cd tools/src/test
-lazbuild regex_tester_test.lpi
+lazbuild tools_test.lpi
 ```
 
 The same applies to `FastPlaz/test/fastplaz_test.lpi`. That project requires the `fastplaz_runtime` package (`tools/fastplaz_runtime.lpk`), which has to be known to Lazarus / `lazbuild`; register it once with `lazbuild --add-package-link tools/fastplaz_runtime.lpk` if it is not.
@@ -101,13 +101,13 @@ Compiled units go to `lib/<cpu>-<os>/`. Build output is ignored by `.gitignore`.
 Windows:
 
 ```bat
-regex_tester_test.exe -a
+tools_test.exe -a
 ```
 
 Linux / macOS:
 
 ```bash
-./regex_tester_test -a
+./tools_test -a
 ```
 
 Both projects use `TFastPlazTestRunner` (`FastPlaz/test/fastplaz_testrunner.pas`), a thin extension of the FPCUnit console runner that prints every suite and every test the moment it starts, followed by its result and duration. A long run therefore shows what is going on instead of staying silent until the end. Example output:
@@ -147,7 +147,7 @@ The live output is switched off automatically when a machine readable format (`x
 
 ### Running from the Lazarus IDE
 
-1. Open `tools/src/test/regex_tester_test.lpi` or `FastPlaz/test/fastplaz_test.lpi` (*Project → Open Project*).
+1. Open `tools/src/test/tools_test.lpi` or `FastPlaz/test/fastplaz_test.lpi` (*Project → Open Project*).
 2. Set the parameter in *Run → Run Parameters* → *Command line parameters*: `-a`.
 3. Press **F9**.
 
@@ -199,7 +199,7 @@ Setiap project test adalah program console mandiri, sehingga bisa dijalankan tan
 
 | Project | Lokasi | Yang diuji |
 | --- | --- | --- |
-| `regex_tester_test` | `tools/src/test` | `regex_tester_lib` – logika di balik tool *Regex Tester* dan konstanta `REGEX_*` |
+| `tools_test` | `tools/src/test` | `regex_tester_lib` – logika di balik tool *Regex Tester* dan konstanta `REGEX_*`; `tools_lib` – sanitasi nama, salin template, `.htaccess`, nama model dan helper respons FastCode yang dipakai wizard IDE |
 | `fastplaz_test` | `FastPlaz/test` | `datetime_lib` – `DateTimeHuman()`, `DateTimeHumanAt()` dan parser string tanggal `TryParseHumanDate()`<br>`redis_lib` – `TRedisLib`: konfigurasi, balasan RESP, SET/GET, timeout dan reconnect (lihat [Test Redis](#test-redis))<br>`json_lib` – `TJSONUtil`: load, akses path, nilai bertipe, array dan item<br>`config_lib` – `TMyConfig`: `ValidateFile()`, `Value[]`, `GetObject()` dan `SetDataValue()`<br>`common` – base64, `HTMLDecode()`, `StripHTML()`, `RandomString()`, `isIPAddress()` dan helper string<br>`math_lib` – `Fact()`, `Power()`, `Choose()` dan `Stirling()` termasuk argumen tidak valid<br>`http_lib` – body multipart (`HTTPMultipartEncode()`), `FormData[]`, kepemilikan `RequestBody`, `Clear()` dan `THTTPResponse`<br>`mailer_lib` – `FormatMailAddress()`, `SanitizeMailHeader()`, daftar To/Cc/Bcc dan `Send()` tanpa dukungan mailer<br>`logutil_lib` – `TLogUtil.Add()`: pembuatan file, append, nama modul, skip, satu baris per entri dan `Prefix`<br>`smtp_lib` – `TSMTPClient` terhadap server SMTP palsu dalam proses (EHLO, AUTH PLAIN, RCPT, DATA, QUIT, jalur error) dan pembangun pesan<br>`stemmingnazief_lib` – `TStemmingNazief`: pemuatan kamus, aturan prefiks/sufiks/jamak, angka, kata tidak baku, terminasi pada kata tak dikenal dan keluaran JSON<br>`html_lib` – `HTMLEncode()`, `StripTags()`, `MoreLess()`, helper form/link yang di-escape dan widget `ReCaptcha()` v2<br>`recaptcha_lib` – `TReCaptcha`: parsing respons siteverify dan permintaan verifikasi (field, token berisi `&`, error) lewat transport yang bisa di-override<br>`rss_lib` – `TRSSReaderLib`: parsing RSS 2.0, RSS 1.0 dan Atom, penyaringan item, fallback gambar, input rusak dan fetch gagal<br>`solr_lib` – `TSOLRModel`: pembentukan dan encoding URL, iterasi hasil, hasil kosong, error HTTP/Solr/JSON lewat request yang bisa di-override<br>`serialize_lib` – `serialize()`/`unserialize()`: format PHP, format lama FastPlaz, semua tipe variant, input rusak dan terlalu besar, round trip<br>`verbal_expressions_lib` – `TVerbalExpressions`: Digit/word/Tab/LineBreak, SomethingBut, escaping di dalam character class, Replace literal, modifier<br>`nlp_lib` – `TNLP.Similarity()`: skor cosine terbatas 0..1, input kosong, stop word, assignment list<br>`image_lib` – `TImageLib`: pemuatan PNG/JPEG, isi salah, resize (aspek, stretch, ukuran tidak valid), penyimpanan, pemakaian ulang `AsStream`<br>`language_lib` – `__()` dan `LoadPOFile()`: pencocokan eksak, escape, entri multi-baris, bahasa fallback, reload cache<br>`database_lib` – `TSimpleModel` terhadap database SQLite sementara: daftar field, Save/Update/Delete/SoftDelete, Find, All, keluaran JSON, helper query, nama tabel dan alias dikutip (`QuoteIdentifier()`), Save/Delete yang gagal mengembalikan False dengan `Message` (diabaikan bila library SQLite tidak bisa dimuat, lihat `SQLITE3_LIBRARY`)<br>`session_controller` – `TSessionController`: cookie/id sesi, simpan-baca di file, encoding nilai, timeout dalam menit, penghapusan saat kedaluwarsa, end/restart, `RegenerateID()`, start ulang setelah `EndSession()` paksa; storage database dengan SQLite (SQL berparameter, `X-Forwarded-For` tidak dipercaya)<br>`theme_controller` – `TThemeUtil`: prosesor `[if] [else] [/if]` (operator, nested, HTML multi-baris, nilai berkutip, variabel tak dikenal, di dalam foreach JSON), filter escape/date, pemangkasan spasi, cache time, state per instance dan kepemilikan objek bersama, `SafeTemplateName()`, blok `[foreach]` bersarang dan reset kursor dataset, `[flashmessages]` di-HTML-encode<br>`fastplaz_handler` – `SanitizeHeaderValue()`, `HeaderToEnvName()` dan accessor request yang dibuat saat startup<br>`string_helpers`, `datetime_helpers`, `json_helpers`, `array_helpers`, `integer_helpers` – type helper (parsing tanggal, selisih, unix time, JSON per nama, array dari string)<br>`modvar_model`/`modvar_util` – `ModVar[]` dengan SQLite: set/get, update di tempat, kutip pada nama, nilai NULL, `QuoteValue()`<br>`telegram_integration`, `facebookmessenger_integration`, `line_integration` – parsing update/webhook (pesan, callback query, postback, grup), payload keyboard dibuat dari salinan baris, handler payload per instance, JSON `TLineTemplateMessage`, pemanggilan tanpa token/file mengembalikan False<br>`whois_integration`, `graphql_integration`, `slack_integration`, `botframework_integration`, `elasticsearch_integration`, `openai_integration` – `ExtensionOf()`, body request yang di-escape, slash `ServiceURL`, pembentukan URL, payload dibangun ulang tiap panggilan; semua kelas integrasi dibuat dan dibebaskan (destructor berjalan)<br>`security_util`, `grouppermission_model`, `user_model`/`user_util`, `group_model`/`group_util`, `permission_util` (src/cms) – round trip salted hash, aturan password/e-mail, `TimingSafeEquals()`, `FixSecurityString()`, dan dengan SQLite: tambah/cari, kutip tidak di-inject, ganti password, aktivasi/suspend/hapus, grup dan penghitung anggota, level izin termasuk `ANY`, login/logout pada sesi; semua controller cms dan app ikut dikompilasi |
 
 ### Prasyarat
@@ -267,14 +267,14 @@ Windows:
 
 ```bat
 cd tools\src\test
-C:\lazarus\lazbuild.exe regex_tester_test.lpi
+C:\lazarus\lazbuild.exe tools_test.lpi
 ```
 
 Linux / macOS (`lazbuild` ada di `PATH`):
 
 ```bash
 cd tools/src/test
-lazbuild regex_tester_test.lpi
+lazbuild tools_test.lpi
 ```
 
 Hal yang sama berlaku untuk `FastPlaz/test/fastplaz_test.lpi`. Project itu membutuhkan package `fastplaz_runtime` (`tools/fastplaz_runtime.lpk`) yang harus sudah dikenal oleh Lazarus / `lazbuild`; jika belum, daftarkan sekali dengan `lazbuild --add-package-link tools/fastplaz_runtime.lpk`.
@@ -286,13 +286,13 @@ Hasil kompilasi unit disimpan di `lib/<cpu>-<os>/`. Hasil build sudah diabaikan 
 Windows:
 
 ```bat
-regex_tester_test.exe -a
+tools_test.exe -a
 ```
 
 Linux / macOS:
 
 ```bash
-./regex_tester_test -a
+./tools_test -a
 ```
 
 Kedua project memakai `TFastPlazTestRunner` (`FastPlaz/test/fastplaz_testrunner.pas`), turunan tipis dari console runner FPCUnit yang mencetak setiap suite dan setiap test begitu mulai dijalankan, diikuti hasil dan durasinya. Jadi saat test berjalan lama, terlihat test mana yang sedang berjalan, bukan diam sampai selesai. Contoh output:
@@ -332,7 +332,7 @@ Output live otomatis dimatikan bila format yang bisa dibaca mesin (`xml`, `latex
 
 ### Menjalankan dari Lazarus IDE
 
-1. Buka `tools/src/test/regex_tester_test.lpi` atau `FastPlaz/test/fastplaz_test.lpi` (*Project → Open Project*).
+1. Buka `tools/src/test/tools_test.lpi` atau `FastPlaz/test/fastplaz_test.lpi` (*Project → Open Project*).
 2. Isi parameter di *Run → Run Parameters* → *Command line parameters*: `-a`.
 3. Tekan **F9**.
 
