@@ -115,7 +115,7 @@
         <UnitName Value="recaptcha_lib"/>
       </Item22>
       <Item23>
-        <Filename Value="../FastPlaz/src/library/regexpr_compilers.inc"/>
+        <Filename Value="../FastPlaz/src/library/regexpr_compilers_lib.inc"/>
         <Type Value="Include"/>
       </Item23>
       <Item24>
