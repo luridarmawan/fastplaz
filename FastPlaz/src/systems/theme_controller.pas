@@ -17,7 +17,7 @@ uses
   {$endif}
   fpWeb,
   fpcgi, fpTemplate, fphttp, fpjson, HTTPDefs, dateutils,
-  regexpr_lib, db, sqldb,
+  regexpr_lib, db, sqldb, StrUtils,
   common, fastplaz_handler, database_lib, datetime_lib, modvar_util, json_lib,
   Classes, SysUtils, Variants;
 
@@ -99,6 +99,7 @@ type
     isRendering,
     isRenderingModule : boolean;
     foreachJsonIndex : integer;
+    FIncludeDepth : integer;
     function GetAssignVar(const TagName: String): Pointer;
     function GetBaseURL: string;
     function GetFlashMessage: string;
@@ -141,6 +142,9 @@ type
 
     //-- [if ] processor
     function ConditionalIfProcessor( TagProcessor: TReplaceTagEvent; Content:string):string;
+    function SplitCondition( const AHeader: string): TStringList;
+    function IsKnownVariable( const AName: string): boolean;
+    function EvaluateCondition( const AHeader: string; out AMatched, AKnown: boolean): boolean;
     function conditionIsEqual( Value1, Value2: variant): boolean;
     function conditionIsNotEqual( Value1, Value2: variant): boolean;
     function conditionIsLessThan( Value1, Value2: variant): boolean;
@@ -177,6 +181,8 @@ type
     property RenderType : TRenderType read GetRenderType write SetRenderType;
     function GetVersionInfo():boolean;
     function GetDebugInfo( DebugType:string):string;
+    // template name taken from the request: no path separators, no "..", no #0
+    class function SafeTemplateName( const AName: string): string;
     property CacheTime : integer read FCacheTime write SetCacheTime;// in hours
     property FlashMessages: string read GetFlashMessage write SetFlashMessage;
 
@@ -391,6 +397,8 @@ var
   vartmp, assignTmp : TStrings;
   f : double;
   idx : integer;
+  obj : TObject;
+  jsonItem : TJSONData;
 begin
   Result := '';
   vartmp := Explode( VariableName, '.');
@@ -452,8 +460,17 @@ begin
       Exit;
     try
       fieldname:= vartmp[1];
-      tmpvalue := TSQLQuery( assignVarMap.Data[idx]^).FieldByName(fieldname).AsString;
-      Result := tmpvalue;
+      obj := TObject( assignVarMap.Data[idx]^);
+      if obj is TJSONData then
+      begin
+        // "item.a.b" -> path "a.b" of the current row
+        fieldname := Copy( VariableName, Pos('.', VariableName) + 1, Length( VariableName));
+        jsonItem := TJSONData(obj).Items[foreachJsonIndex].FindPath( fieldname);
+        if jsonItem <> nil then
+          Result := jsonItem.AsString;
+      end
+      else if obj is TDataSet then
+        Result := TDataSet(obj).FieldByName(fieldname).AsString;
     except
       on e: Exception do
       begin
@@ -611,7 +628,9 @@ begin
     Exit;
   case Filter of
     'nl2br' : begin
-      Result := StringReplace( Content, #13#10, '<br>', [rfReplaceAll]);
+      Result := StringReplace( Content, #13#10, #10, [rfReplaceAll]);
+      Result := StringReplace( Result, #13, #10, [rfReplaceAll]);
+      Result := StringReplace( Result, #10, '<br>', [rfReplaceAll]);
     end;
     'wpautop' : Result := wpautop( Content);
     'uppercase' : begin
@@ -1098,111 +1117,223 @@ begin
   end;//- if AppData.cache_type = 'file' then
 end;
 
-function TThemeUtil.ConditionalIfProcessor(TagProcessor: TReplaceTagEvent; Content: string): string;
-
-  function DoConditioning(var ARegex: TRegExpr; var AContent: String; IsNext: Boolean = False): Boolean;
-  var
-    s, condition: String;
-    parameter: TStrings;
-    value1, value2: variant;
-  begin
-    Result := False;
-    parameter := Explode(string(ARegex.Match[1]), ' ');
-    try
-      if (parameter.Count < 4) then
-      begin
-        Exit;
-      end;
-
-      if FAssignVarStringMap.IndexOfName( parameter[1]) = -1 then
-      begin
-        AContent := StringReplace( AContent, string(ARegex.Match[0]), '', [rfReplaceAll]);
-        Result := True;
-        Exit;
-      end;
-
-      value1 := VarValue[ parameter[1]];
-      value2 := '';
-      if not ((parameter[3] = '''''') or (parameter[3] = '""')) then
-      begin
-        value2 := VarValue[ parameter[3]];
-      end;
-      condition := parameter[2];
-      if condition = '=' then condition := 'eq';
-      if condition = '<' then condition := 'lt';
-      if condition = '>' then condition := 'gt';
-      case condition of
-        'eq':
-          begin
-            if conditionIsEqual( value1, value2) then
-              s := string(ARegex.Match[2])
-            else
-              s := string(ARegex.Match[4]);
-            AContent := StringReplace( AContent, string(ARegex.Match[0]), s, [rfReplaceAll]);
-          end;
-
-        'neq':
-          begin
-            if conditionIsNotEqual( value1, value2) then
-              s := string(ARegex.Match[2])
-            else
-              s := string(ARegex.Match[4]);
-            AContent := StringReplace( AContent, string(ARegex.Match[0]), s, [rfReplaceAll]);
-          end;
-
-        'lt':
-          begin
-            if conditionIsLessThan( value1, value2) then
-              s := string(ARegex.Match[2])
-            else
-              s := string(ARegex.Match[4]);
-            AContent := StringReplace( AContent, string(ARegex.Match[0]), s, [rfReplaceAll]);
-          end;
-
-        'gt':
-          begin
-            if conditionIsGreaterThan( value1, value2) then
-              s := string(ARegex.Match[2])
-            else
-              s := string(ARegex.Match[4]);
-            AContent := StringReplace( AContent, string(ARegex.Match[0]), s, [rfReplaceAll]);
-          end;
-
-      end;
-
-      Result := True;
-    finally
-      FreeAndNil( parameter);
-    end;
-  end;
-
-const
-  __CONDITIONAL_IF_VALUE = '([\.\$\?#@&A-Za-z0-9!,;:=<"''\''>_\|\(\)\\\/\-\n\r \[\]]+?)(\[else\]+)?([\.\$A-Za-z0-9=_ ]+)';
-
+class function TThemeUtil.SafeTemplateName(const AName: string): string;
 var
-  regex : TRegExpr;
+  i: integer;
+begin
+  Result := AName;
+  i := Pos(#0, Result);
+  if i > 0 then
+    Result := Copy(Result, 1, i - 1);
+  Result := Trim(Result);
+  if (Pos('/', Result) > 0) or (Pos('\', Result) > 0) or (Pos(':', Result) > 0)
+    or (Pos('..', Result) > 0) then
+    Result := '';
+end;
+
+// "var op value" -> three tokens; a quoted value may contain spaces
+function TThemeUtil.SplitCondition(const AHeader: string): TStringList;
+var
+  i: integer;
+  token: string;
+  quote: char;
+begin
+  Result := TStringList.Create;
+  token := '';
+  quote := #0;
+  for i := 1 to Length(AHeader) do
+  begin
+    if quote <> #0 then
+    begin
+      token := token + AHeader[i];
+      if AHeader[i] = quote then
+        quote := #0;
+    end
+    else if AHeader[i] in ['"', ''''] then
+    begin
+      quote := AHeader[i];
+      token := token + AHeader[i];
+    end
+    else if AHeader[i] in [' ', #9, #13, #10] then
+    begin
+      if token <> '' then
+        Result.Add(token);
+      token := '';
+    end
+    else
+      token := token + AHeader[i];
+  end;
+  if token <> '' then
+    Result.Add(token);
+end;
+
+// a literal, an assigned variable, an "assignto" variable or a foreach field
+function TThemeUtil.IsKnownVariable(const AName: string): boolean;
+var
+  f: double;
+begin
+  Result := True;
+  if AName = '' then
+    Exit(False);
+  if TryStrToFloat(AName, f) then
+    Exit;
+  if AName[1] in ['"', ''''] then
+    Exit;
+  if FAssignVarStringMap.IndexOfName(AName) <> -1 then
+    Exit;
+  if FTagAssign_Variable.IndexOfName(AName) <> -1 then
+    Exit;
+  if (ForeachTable_Keyname <> '') and (Pos('.', AName) > 0) then
+    Exit;
+  Result := False;
+end;
+
+// False when the header is not "variable operator value".
+// AKnown is False when the variable does not exist: the whole block is dropped.
+function TThemeUtil.EvaluateCondition(const AHeader: string; out AMatched, AKnown: boolean): boolean;
+var
+  parameter: TStringList;
+  value1, value2: variant;
+  condition: string;
+begin
+  Result := False;
+  AMatched := False;
+  AKnown := True;
+  parameter := SplitCondition(AHeader);
+  try
+    if parameter.Count <> 3 then
+      Exit;
+    if not IsKnownVariable(parameter[0]) then
+    begin
+      AKnown := False;
+      Exit(True);
+    end;
+    value1 := VarValue[parameter[0]];
+    value2 := '';
+    if not ((parameter[2] = '''''') or (parameter[2] = '""')) then
+      value2 := VarValue[parameter[2]];
+    condition := LowerCase(parameter[1]);
+    case condition of
+      '=', '==': condition := 'eq';
+      '!=', '<>': condition := 'neq';
+      '<': condition := 'lt';
+      '>': condition := 'gt';
+      '<=': condition := 'lte';
+      '>=': condition := 'gte';
+    end;
+    case condition of
+      'eq': AMatched := conditionIsEqual(value1, value2);
+      'neq': AMatched := conditionIsNotEqual(value1, value2);
+      'lt': AMatched := conditionIsLessThan(value1, value2);
+      'gt': AMatched := conditionIsGreaterThan(value1, value2);
+      'lte': AMatched := not conditionIsGreaterThan(value1, value2);
+      'gte': AMatched := not conditionIsLessThan(value1, value2);
+      else
+        Exit;
+    end;
+    Result := True;
+  finally
+    parameter.Free;
+  end;
+end;
+
+// [if var op value] ... [else] ... [/if]
+// Scanned by position instead of a regular expression: the old pattern only
+// matched when whitespace preceded [/if], could not take an [else] branch
+// spanning lines, failed on "%", "{" or non-ASCII content (the raw tag then
+// leaked into the page) and returned the tail of the true branch as the
+// false branch. Blocks may be nested; an unclosed [if] is left untouched.
+function TThemeUtil.ConditionalIfProcessor(TagProcessor: TReplaceTagEvent; Content: string): string;
+const
+  IF_OPEN = '[if ';
+  ELSE_TAG = '[else]';
+  IF_CLOSE = '[/if]';
+var
+  p, headerEnd, scan, depth, nextIf, nextElse, nextClose, nearest,
+  elsePos, closePos: integer;
+  header, trueBranch, falseBranch, replacement: string;
+  matched, known: boolean;
 begin
   Result := Content;
-  regex := TRegExpr.Create;
-  with regex do
+  p := 1;
+  while True do
   begin
-    //Expression := Format('%s(.*?)%s', [ __CONDITIONAL_IF_START, __CONDITIONAL_IF_END]);
-    // \[if([\.\$A-Za-z_0-9=\ ]+)\]([a-z]+)(\[else\])?([a-z]+)\[/if\]
-    Expression := RegExprString(Format('%s'+__CONDITIONAL_IF_VALUE+'%s', [ __CONDITIONAL_IF_START, __CONDITIONAL_IF_END]));
-    if Exec( RegExprString(Content)) then
+    p := PosEx(IF_OPEN, Result, p);
+    if p = 0 then
+      Break;
+    headerEnd := PosEx(']', Result, p);
+    if headerEnd = 0 then
+      Break;
+    header := Copy(Result, p + Length(IF_OPEN), headerEnd - p - Length(IF_OPEN));
+
+    // find the [/if] of this block and its own [else]
+    depth := 1;
+    elsePos := 0;
+    closePos := 0;
+    scan := headerEnd + 1;
+    while depth > 0 do
     begin
-      if not DoConditioning(regex, Result) then
+      nextIf := PosEx(IF_OPEN, Result, scan);
+      nextElse := PosEx(ELSE_TAG, Result, scan);
+      nextClose := PosEx(IF_CLOSE, Result, scan);
+      if nextClose = 0 then
+        Break;
+      nearest := nextClose;
+      if (nextIf > 0) and (nextIf < nearest) then
+        nearest := nextIf;
+      if (nextElse > 0) and (nextElse < nearest) then
+        nearest := nextElse;
+      if nearest = nextIf then
       begin
-        Free;
-        Exit;
-      end;
-      while ExecNext do
+        Inc(depth);
+        scan := nearest + Length(IF_OPEN);
+      end
+      else if nearest = nextElse then
       begin
-        DoConditioning(regex, Result, True)
+        if (depth = 1) and (elsePos = 0) then
+          elsePos := nearest;
+        scan := nearest + Length(ELSE_TAG);
+      end
+      else
+      begin
+        Dec(depth);
+        if depth = 0 then
+          closePos := nearest
+        else
+          scan := nearest + Length(IF_CLOSE);
       end;
     end;
+    if closePos = 0 then
+    begin
+      p := headerEnd + 1;
+      Continue;
+    end;
 
-    Free;
+    if elsePos > 0 then
+    begin
+      trueBranch := Copy(Result, headerEnd + 1, elsePos - headerEnd - 1);
+      falseBranch := Copy(Result, elsePos + Length(ELSE_TAG), closePos - elsePos - Length(ELSE_TAG));
+    end
+    else
+    begin
+      trueBranch := Copy(Result, headerEnd + 1, closePos - headerEnd - 1);
+      falseBranch := '';
+    end;
+
+    if not EvaluateCondition(header, matched, known) then
+    begin
+      // not a condition we understand: keep the tag, continue inside it
+      p := headerEnd + 1;
+      Continue;
+    end;
+    if not known then
+      replacement := ''
+    else if matched then
+      replacement := ConditionalIfProcessor(TagProcessor, trueBranch)
+    else
+      replacement := ConditionalIfProcessor(TagProcessor, falseBranch);
+    Result := Copy(Result, 1, p - 1) + replacement + Copy(Result, closePos + Length(IF_CLOSE), MaxInt);
+    p := p + Length(replacement);
   end;
 end;
 
@@ -1458,8 +1589,8 @@ begin
     tmp := templateEngine.GetContent;
     FreeAndNil(templateEngine);
 
-    //-- proccess conditional if
-    //html := ConditionalIfProcessor( TagProcessor, html);
+    //-- proccess conditional if while this row is still current
+    tmp := ConditionalIfProcessor( TagProcessor, tmp);
 
     html := html + tmp;
     inc( foreachJsonIndex);
@@ -1534,10 +1665,15 @@ begin
   else begin
     tag_with_filter := Explode( TagString, '|');
     tagstring_custom := ExplodeTags( tag_with_filter[0]);
-    filter := tag_with_filter[1];
+    filter := '';
+    if tag_with_filter.Count > 1 then
+      filter := trim( tag_with_filter[1]);
     lst := Explode( filter, ' ');
-    filter := lst[0];
-    lst.Delete(0);
+    if lst.Count > 0 then
+    begin
+      filter := lst[0];
+      lst.Delete(0);
+    end;
     tagstring_custom.Add( 'filter=' + filter);
     tagstring_custom.Add( lst.Text);
     FreeAndNil( lst);
@@ -1678,6 +1814,12 @@ begin
   end;
   if ForeachTable_Keyname = '' then
     Exit;
+  // conditionals are evaluated after the row is rendered; keep them intact
+  if (Pos( 'if ', TagString) = 1) or (TagString = 'else') or (TagString = '/if') then
+  begin
+    ReplaceText := FStartDelimiter + TagString + FEndDelimiter;
+    Exit;
+  end;
 
   if Pos( '|', TagString) = 0 then
   begin
@@ -1687,10 +1829,15 @@ begin
   else begin
     tag_with_filter := Explode( TagString, '|');
     tagstring_custom := ExplodeTags( tag_with_filter[0]);
-    filter := tag_with_filter[1];
+    filter := '';
+    if tag_with_filter.Count > 1 then
+      filter := trim( tag_with_filter[1]);
     lst := Explode( filter, ' ');
-    filter := lst[0];
-    lst.Delete(0);
+    if lst.Count > 0 then
+    begin
+      filter := lst[0];
+      lst.Delete(0);
+    end;
     tagstring_custom.Add( 'filter=' + filter);
     tagstring_custom.Add( lst.Text);
     FreeAndNil( lst);
@@ -1738,6 +1885,12 @@ begin
   end;
   if ForeachTable_Keyname = '' then
     Exit;
+  // conditionals are evaluated after the row is rendered; keep them intact
+  if (Pos( 'if ', TagString) = 1) or (TagString = 'else') or (TagString = '/if') then
+  begin
+    ReplaceText := FStartDelimiter + TagString + FEndDelimiter;
+    Exit;
+  end;
 
   if Pos( '|', TagString) = 0 then
   begin
@@ -1747,10 +1900,15 @@ begin
   else begin
     tag_with_filter := Explode( TagString, '|');
     tagstring_custom := ExplodeTags( tag_with_filter[0]);
-    filter := tag_with_filter[1];
+    filter := '';
+    if tag_with_filter.Count > 1 then
+      filter := trim( tag_with_filter[1]);
     lst := Explode( filter, ' ');
-    filter := lst[0];
-    lst.Delete(0);
+    if lst.Count > 0 then
+    begin
+      filter := lst[0];
+      lst.Delete(0);
+    end;
     tagstring_custom.Add( 'filter=' + filter);
     tagstring_custom.Add( lst.Text);
     FreeAndNil( lst);
@@ -1882,7 +2040,9 @@ begin
     tag_with_filter := Explode( TagString, '|');
     tagstring_custom.Text := tag_with_filter.Text;
     FreeAndNil( tag_with_filter);
-    filter := tagstring_custom[1];
+    filter := '';
+    if tagstring_custom.Count > 1 then
+      filter := trim( tagstring_custom[1]);
   end;
   //ReplaceText := tagstring_custom[0];
   //ReplaceText := '';
@@ -2061,7 +2221,17 @@ begin
       ReplaceText :=Copy(ReplaceText,3,Length(ReplaceText)-2);
     end;
     'include' : begin
-      ReplaceText := ThemeUtil.Render( @TagController, tagstring_custom.Values['file'], false, true);;
+      if FIncludeDepth >= 32 then
+        ReplaceText := EchoError( 'include too deep: %s', [tagstring_custom.Values['file']])
+      else
+      begin
+        Inc( FIncludeDepth);
+        try
+          ReplaceText := ThemeUtil.Render( @TagController, tagstring_custom.Values['file'], false, true);
+        finally
+          Dec( FIncludeDepth);
+        end;
+      end;
       end;
     'block' : begin
       ReplaceText := BlockController( tagstring_custom.Values['mod'], tagstring_custom.Values['func'], tagstring_custom);
@@ -2189,11 +2359,15 @@ end;
 function TThemeUtil.Render(TagProcessorAddress: TReplaceTagEvent; const LayoutTemplateFile: string; Cache: boolean;
   SubModule: boolean): string;
 var
-  templateFilename, _ext, moduleActive, relativeFile: string;
+  templateFilename, _ext, moduleActive, relativeFile, layoutFile: string;
   templateEngine: TFPTemplate;
   response_json : TJSONObject;
 begin
   Result := '';
+  // a #0 would cut the name at the OS level and drop the extension check
+  layoutFile := LayoutTemplateFile;
+  if Pos(#0, layoutFile) > 0 then
+    layoutFile := Copy(layoutFile, 1, Pos(#0, layoutFile) - 1);
   if not AppData.themeEnable then
   begin
     FastPlasAppandler.DieRaise(__( __ERR_THEME_NOT_ENABLED),[]);
@@ -2217,7 +2391,7 @@ begin
     Exit;
   end;
 
-  templateFilename := LayoutTemplateFile;
+  templateFilename := layoutFile;
   if not SubModule then
     if FLayout <> '' then templateFilename := trim(FLayout);
   if templateFilename <> '' then
@@ -2238,16 +2412,16 @@ begin
       // fallback: path relative to the web root (current dir).
       // A leading "/" means "from the web root", not from the drive/fs root,
       // ex: [include file="/modules/inbox/includes/thread.html"]
-      relativeFile := SetDirSeparators( trim( LayoutTemplateFile));
+      relativeFile := SetDirSeparators( trim( layoutFile));
       relativeFile := StringReplace( relativeFile, '"', '', [rfReplaceAll]);
       relativeFile := StringReplace( relativeFile, '''', '', [rfReplaceAll]);
       while (relativeFile <> '') and (relativeFile[1] = DirectorySeparator) do
         Delete( relativeFile, 1, 1);
       templateFilename := IncludeTrailingPathDelimiter( GetCurrentDir) + relativeFile;
       // last resort: a real absolute path (ex: "D:\..." on Windows)
-      if (not FileExists(templateFilename)) and (ExtractFileDrive( LayoutTemplateFile) <> '')
-        and FileExists( LayoutTemplateFile) then
-        templateFilename := LayoutTemplateFile;
+      if (not FileExists(templateFilename)) and (ExtractFileDrive( layoutFile) <> '')
+        and FileExists( layoutFile) then
+        templateFilename := layoutFile;
       if not FileExists(templateFilename) then
       begin
         Result := EchoError( __(__Err_Theme_Not_Exists), [ templateFilename, ThemeName]);
@@ -2257,8 +2431,9 @@ begin
   end
   else
   begin
-    moduleActive := GetActiveModuleName(Application.Request);
-    templateFilename := Application.Request.QueryFields.Values['act'];
+    // both come from the request: "act=../../x" must not leave the theme
+    moduleActive := SafeTemplateName( GetActiveModuleName(Application.Request));
+    templateFilename := SafeTemplateName( Application.Request.QueryFields.Values['act']);
     if templateFilename = '' then
       templateFilename := 'master';
     templateFilename := GetCurrentDir + DirectorySeparator + 'themes'
