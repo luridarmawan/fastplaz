@@ -780,6 +780,9 @@ begin
         FreeAndNil(FIniFile);
         DeleteIniFile;
         FSessionTerminated := True;
+        // a later StartSession (the next request of a daemon, or a login
+        // after a forced logout) starts afresh instead of staying terminated
+        FSessionStarted := False;
       end
       else
         UpdateIniFile;
@@ -792,6 +795,7 @@ begin
         FSessionVars.Clear;
         DeleteDatabaseRow(FSessionID);
         FSessionTerminated := True;
+        FSessionStarted := False;
       end
       else
         Clear;

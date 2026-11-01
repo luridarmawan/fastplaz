@@ -7,6 +7,9 @@ file that was distributed with this source code.
 }
 unit clarifai_integration;
 
+{ DEPRECATED: Clarifai v1 API discontinued. The unit stays for existing callers; every request to the
+  old endpoint fails. }
+
 {
   [x] USAGE
 
@@ -64,7 +67,7 @@ type
   published
     property ClientID: string read FClientID write FClientID;
     property ClientSecret: string read FClientSecret write FClientSecret;
-  end;
+  end deprecated 'Clarifai v1 API discontinued';
 
 implementation
 

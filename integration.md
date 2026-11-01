@@ -3,7 +3,7 @@
 
 note: sebagian fitur integrasi sudah _deprecated_.
 
-- BMKG - Badan Meteorologi Klimatologi Dan Geofisika
+- BMKG - Badan Meteorologi Klimatologi Dan Geofisika (discontinued)
 - Terjemahan Al Quran
 - Pajak Kendaraan
 - Office 365
@@ -13,14 +13,14 @@ note: sebagian fitur integrasi sudah _deprecated_.
 Networking / Infrastruktur
 
 - WHOIS Domain
-- Newrelic
+- Newrelic (discontinued)
 - Image Cloudinary
 
 Entertainment & Kuliner
 
 - IMDB Movie Info
 - Sprout Video
-- Zomato
+- Zomato (discontinued)
 
 Bahasa
 
