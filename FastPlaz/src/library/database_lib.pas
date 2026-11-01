@@ -57,6 +57,7 @@ type
     FScriptLimit,
     FScriptOrderBy : string;
     FUseSoftDelete: boolean;
+    FSoftDeleteField: string;
 
     primaryKeyValue : string;
     FGenFields : TStringList;
@@ -100,7 +101,10 @@ type
     property EOF: boolean read GetEOF;
     property LastInsertID: LongInt read GetLastInsertID;
     property Message: string read AMessage;
+    // With UseSoftDelete, Delete marks rows through SoftDeleteField
+    // (default is_deleted) and Find/All/GetAll skip marked rows.
     property UseSoftDelete: boolean read FUseSoftDelete write FUseSoftDelete;
+    property SoftDeleteField: string read FSoftDeleteField write FSoftDeleteField;
 
     function ParamByName(Const AParamName : String) : TParam;
     property SQL : TStringlist read getSQL;
@@ -991,6 +995,7 @@ begin
   FGenFields := nil;
   FieldValueMap := nil;
   FUseSoftDelete := False;
+  FSoftDeleteField := 'is_deleted';
   Data := TSQLQuery.Create(nil);
   Data.UniDirectional:=True;
   Data.DataBase := DB_Connector;
@@ -1033,6 +1038,8 @@ function TSimpleModel.GetAll(Limit: Integer; Offset: Integer;
 begin
   _queryPrepare;
   Data.SQL.Text := 'SELECT ' + FSelectField + ' FROM ' + FTableName;
+  if FUseSoftDelete and (Trim(FSoftDeleteField) <> '') then
+    Data.SQL.Add('WHERE ' + FTableName + '.' + FSoftDeleteField + '=0');
   if Limit > 0 then
     Data.SQL.Add('LIMIT ' + i2s(Limit));
   if Offset > 0 then
@@ -1148,6 +1155,14 @@ begin
 
     end;
     sWhere := sWhere.Replace(' AND OR ', ' OR ');
+  end;
+  // soft deleted rows are not part of the result
+  if FUseSoftDelete and (Trim(FSoftDeleteField) <> '') then
+  begin
+    if sWhere = '' then
+      sWhere := FAliasName + '.' + FSoftDeleteField + '=0'
+    else
+      sWhere := '(' + sWhere + ') AND ' + FAliasName + '.' + FSoftDeleteField + '=0';
   end;
   if CustomField = '' then begin
     _queryPrepare;
@@ -1478,9 +1493,56 @@ begin
   Result := Delete( primaryKey+'='+i2s(ID));
 end;
 
+// Marks rows as deleted instead of removing them. This used to be a stub
+// that returned False, so Delete with UseSoftDelete did nothing.
 function TSimpleModel.SoftDelete(Where: string; AutoCommit: boolean): boolean;
+var
+  s: string;
 begin
   Result := False;
+  if Trim(FSoftDeleteField) = '' then
+    Exit;
+  if ((Where='') and (Data.Active)) then
+  begin
+    if RecordCount <> 1 then exit;
+  end;
+  if (Where = '') and ((primaryKey = '') or (primaryKeyValue = '')) then
+    Exit;
+  if Data.Active then Data.Close;
+  if not DB_Connector.Connected then begin
+    DisplayError(_ERR_DATABASE_NOT_INITIALIZED);
+    Exit;
+  end;
+  if AppData.databaseRead <> AppData.databaseWrite then
+  begin
+    Data.DataBase := DatabaseSecond_Prepare( AppData.databaseWrite, 'write');
+    if Data.DataBase = nil then
+    begin
+      DisplayError( format( _ERR_DATABASE_CANNOT_CONNECT, [ AppData.databaseWrite]));
+      Data.DataBase := DB_Connector;
+      Exit;
+    end;
+  end;
+  s := 'UPDATE ' + TableName + ' SET ' + FFieldQuote + FSoftDeleteField + FFieldQuote + '=1 WHERE ';
+  if Where = '' then
+    s := s + primaryKey + '=' + QuotedStr( primaryKeyValue)
+  else
+    s := s + Where;
+  try
+    Data.SQL.Text := s;
+    Data.ExecSQL;
+    if AutoCommit then TSQLConnector( Data.DataBase).Transaction.Commit;
+    Result := True;
+  except
+    on E: Exception do begin
+      AMessage := E.Message;
+      if AppData.debug then begin
+        LogUtil.add( E.Message);
+        LogUtil.add( Data.SQL.Text);
+      end;
+    end;
+  end;
+  Data.DataBase := DB_Connector;
 end;
 
 function TSimpleModel.SoftDelete(ID: LongInt): boolean;
@@ -1554,6 +1616,9 @@ end;
 procedure TSimpleModel.GenerateScript;
 begin
   Clear;
+  // Where/OrderBy/Limit without a Select used to produce "SELECT  FROM"
+  if Trim(FScriptFieldNames) = '' then
+    FScriptFieldNames := '*';
   Data.SQL.Text := 'SELECT ' + FScriptFieldNames;
   Data.SQL.Add( 'FROM ' + FTableName);
   if FScriptWhere <> '' then
