@@ -5,7 +5,8 @@ program fastplaz_test;
 uses
   Classes, consoletestrunner, test_datetime_lib, test_redis_lib,
   test_json_lib, test_config_lib, test_common, test_math_lib,
-  test_http_lib, test_mailer_lib, test_logutil_lib, test_smtp_lib;
+  test_http_lib, test_mailer_lib, test_logutil_lib, test_smtp_lib,
+  test_stemmingnazief_lib;
 
 type
 
