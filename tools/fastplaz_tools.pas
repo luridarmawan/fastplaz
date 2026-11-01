@@ -12,11 +12,11 @@ uses
   de_connection_editor, de_connector, de_dbbrowser, fastplaz_tools_register, 
   json_tools, menu_experts, model_lib, model_wzd, modsimple_lib, 
   modsimple_wzd, modsimplejson_lib, packageapp_lib, packageapp_wzd, 
-  project_lib, project_wzd, projectapi_lib, projectapi_wzd, 
-  regex_tester, themestructure_wzd, webstructure_lib, 
-  webstructure_wzd, fastcode_configuration, de_dbmemoedit, tools_lib, 
-  config_lib, regexpr_lib, regexpr_unicodedata_lib, regex_tester_lib, 
-  openai_integration, LazarusPackageIntf;
+  project_lib, project_wzd, projectapi_lib, projectapi_wzd, regex_tester, 
+  themestructure_wzd, webstructure_lib, webstructure_wzd, 
+  fastcode_configuration, de_dbmemoedit, config_lib, regexpr_lib, 
+  regexpr_unicodedata_lib, regex_tester_lib, openai_integration, tools_lib, 
+  LazarusPackageIntf;
 
 implementation
 

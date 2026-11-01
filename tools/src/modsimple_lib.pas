@@ -5,7 +5,7 @@ unit modsimple_lib;
 interface
 
 uses
-  Dialogs, Controls, LazarusPackageIntf, ProjectIntf,
+  Forms, Dialogs, Controls, LazarusPackageIntf, ProjectIntf,
   Classes, SysUtils;
 
 resourcestring
@@ -22,19 +22,18 @@ type
   public
     constructor Create; override;
     constructor Create(AsAPI: boolean);
+    function Init(var NewFilename: string; NewOwner: TObject;
+      var NewSource: string; Quiet: boolean): TModalResult; override;
     function GetInterfaceUsesSection: string; override;
     function GetLocalizedName: string; override;
     function GetLocalizedDescription: string; override;
-    function GetUnitDirectives: string; virtual;
     function GetInterfaceSource(const Filename, SourceName,
       ResourceName: string): string;
       override;
     function GetImplementationSource(const Filename, SourceName,
       ResourceName: string): string; override;
-    function GetResourceSource(const ResourceName: string): string; override;
     function CreateSource(const Filename, SourceName, ResourceName: string): string;
       override;
-    procedure UpdateDefaultPascalFileExtension(const DefPasExt: string); override;
   end;
 
   { TFileRouteDescModule }
@@ -49,11 +48,38 @@ type
   end;
 
 var
-  _GlobalProjectName : String;
+  _GlobalProjectName: string;
+
+// Shows the module wizard and stores its result in ModulTypeName and
+// Permalink. Returns False when the wizard was cancelled.
+function AskModuleName(const ADefaultTypeName, ADefaultPermalink: string): boolean;
 
 implementation
 
-uses fastplaz_tools_register, modsimple_wzd;
+uses fastplaz_tools_register, tools_lib, modsimple_wzd;
+
+function AskModuleName(const ADefaultTypeName, ADefaultPermalink: string): boolean;
+var
+  wizard: TfModuleSimpleWizard;
+begin
+  Result := False;
+  ModulTypeName := ADefaultTypeName;
+  Permalink := ADefaultPermalink;
+  wizard := TfModuleSimpleWizard.Create(nil);
+  try
+    if wizard.ShowModal <> mrOk then
+      Exit;
+    ModulTypeName := ControllerTypeName(wizard.edt_ModuleName.Text);
+    Permalink := SanitizePermalink(wizard.edt_Permalink.Text);
+    if Permalink = '' then
+      Permalink := SanitizePermalink(wizard.edt_ModuleName.Text);
+    if Permalink = '' then
+      Permalink := ADefaultPermalink;
+    Result := True;
+  finally
+    wizard.Free;
+  end;
+end;
 
 { TFileRouteDescModule }
 
@@ -75,20 +101,19 @@ function TFileRouteDescModule.GetImplementationSource(
 var
   str: TStringList;
 begin
-  Result := inherited GetImplementationSource(Filename, SourceName, ResourceName);
   str := TStringList.Create;
-  with str do
-  begin
-    Add('uses info_controller, ' + LowerCase(_GlobalProjectName) + '_controller;');
-    Add('');
-    Add('initialization');
-    Add('  Route[ ''info''] := TInfoModule;');
-    Add('  Route[ ''/''] := T' + ucwords(_GlobalProjectName) + 'Controller; // Main Controller');
-    Add('');
+  try
+    str.Add('uses info_controller, ' + LowerCase(_GlobalProjectName) + '_controller;');
+    str.Add('');
+    str.Add('initialization');
+    str.Add('  Route[ ''info''] := TInfoModule;');
+    str.Add('  Route[ ''/''] := ' + ControllerTypeName(_GlobalProjectName) +
+      '; // Main Controller');
+    str.Add('');
+    Result := str.Text;
+  finally
+    str.Free;
   end;
-
-  Result := str.Text;
-  FreeAndNil(str);
 end;
 
 { TFileDescDefaultModule }
@@ -96,7 +121,6 @@ end;
 constructor TFileDescDefaultModule.Create;
 begin
   inherited Create;
-  //Name:=rs_Mod_Default_Name;
   DefaultFileExt := '.pas';
   VisibleInNewDialog := True;
   IsAPI := False;
@@ -106,6 +130,32 @@ constructor TFileDescDefaultModule.Create(AsAPI: boolean);
 begin
   Create;
   IsAPI := AsAPI;
+end;
+
+function TFileDescDefaultModule.Init(var NewFilename: string;
+  NewOwner: TObject; var NewSource: string; Quiet: boolean): TModalResult;
+begin
+  Result := inherited Init(NewFilename, NewOwner, NewSource, Quiet);
+  if Result <> mrOk then
+    Exit;
+  if bExpert then
+    Exit; // the menu already asked
+  if bCreateProject then
+  begin
+    ModulTypeName := ControllerTypeName(_GlobalProjectName);
+    Permalink := 'main';
+    Exit;
+  end;
+  if Quiet then
+  begin
+    ModulTypeName := 'TSampleController';
+    Permalink := 'sample';
+    Exit;
+  end;
+  if not AskModuleName('TSampleController', 'sample') then
+    Exit(mrCancel);
+  if NewFilename = '' then
+    NewFilename := SanitizeIdentifier(Permalink) + '_controller.pas';
 end;
 
 function TFileDescDefaultModule.GetInterfaceUsesSection: string;
@@ -118,21 +168,12 @@ end;
 
 function TFileDescDefaultModule.GetLocalizedName: string;
 begin
-  Result := inherited GetLocalizedName;
   Result := rs_Mod_Default_Name;
 end;
 
 function TFileDescDefaultModule.GetLocalizedDescription: string;
 begin
-  Result := inherited GetLocalizedDescription;
   Result := rs_Mod_Default_Description;
-end;
-
-function TFileDescDefaultModule.GetUnitDirectives: string;
-begin
-  Result := '{$mode objfpc}{$H+}';
-  if Owner is TLazProject then
-    Result := CompilerOptionsToUnitDirectives(TLazProject(Owner).LazCompilerOptions);
 end;
 
 function TFileDescDefaultModule.GetInterfaceSource(
@@ -140,13 +181,11 @@ function TFileDescDefaultModule.GetInterfaceSource(
 var
   str: TStringList;
 begin
-  //Result:=inherited GetInterfaceSource(Filename, SourceName, ResourceName);
   str := TStringList.Create;
   with str do
   begin
     Add('type');
     Add('  ' + ModulTypeName + ' = class(TMyCustomController)');
-    //Add('    procedure RequestHandler(Sender: TObject; ARequest: TRequest; AResponse: TResponse; var Handled: boolean);');
     Add('  private');
     if not IsAPI then
     begin
@@ -189,7 +228,6 @@ begin
       '.CreateNew(AOwner: TComponent; CreateMode: integer);');
     Add('Begin');
     Add('  inherited CreateNew(AOwner, CreateMode);');
-    //Add('  OnRequest := @RequestHandler;');
     Add('  BeforeRequest := @BeforeRequestHandler;');
     Add('End;');
     Add('');
@@ -211,7 +249,6 @@ begin
     Add('End;');
     Add('');
 
-    //Add('procedure ' + ModulTypeName + '.RequestHandler(Sender: TObject; ARequest: TRequest; AResponse: TResponse; var Handled: boolean);');
     Add('// GET Method Handler');
     Add('procedure ' + ModulTypeName + '.Get;');
     Add('Begin');
@@ -273,7 +310,7 @@ begin
       Add('Begin');
       Add('');
       Add('  // your code here');
-      Add('  Result:=h3(''Hello "' + ucwords(ResourceName) +
+      Add('  Result:=h3(''Hello "' + UcWords(ResourceName) +
         '" Module ... FastPlaz !'');');
       Add('');
       Add('End;');
@@ -295,55 +332,11 @@ begin
   end;
 end;
 
-
-function TFileDescDefaultModule.GetResourceSource(const ResourceName: string): string;
-begin
-  Result := inherited GetResourceSource(ResourceName);
-end;
-
 function TFileDescDefaultModule.CreateSource(
   const Filename, SourceName, ResourceName: string): string;
 begin
-  if not bExpert then
-  begin
-    Permalink := 'sample';
-    ModulTypeName := 'TSampleModule';
-    if not bCreateProject then
-    begin
-      with TfModuleSimpleWizard.Create(nil) do
-      begin
-        if ShowModal = mrOk then
-        begin
-          if edt_ModuleName.Text <> '' then
-            ModulTypeName := 'T' + StringReplace(UcWords(edt_ModuleName.Text),
-              ' ', '', [rfReplaceAll]) + 'Controller';
-          Permalink := edt_Permalink.Text;
-          if Permalink = '' then
-          begin
-            Permalink := StringReplace(UcWords(edt_ModuleName.Text),
-              ' ', '', [rfReplaceAll]);
-          end;
-          ModulTypeName := StringReplace(ModulTypeName, '/', '', [rfReplaceAll]);
-          Permalink := StringReplace(Permalink, '/', '_', [rfReplaceAll]);
-        end;
-        Free;
-      end;
-    end
-    else
-    begin
-      ModulTypeName := 'T' + ucwords(_GlobalProjectName) + 'Controller';
-      Permalink := 'main';
-    end;
-  end;
   Result := inherited CreateSource(Filename, SourceName, Permalink);
   log('module "' + ModulTypeName + '" created', Filename);
 end;
-
-procedure TFileDescDefaultModule.UpdateDefaultPascalFileExtension(
-  const DefPasExt: string);
-begin
-  inherited UpdateDefaultPascalFileExtension(DefPasExt);
-end;
-
 
 end.
