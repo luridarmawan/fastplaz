@@ -40,12 +40,18 @@ type
     procedure FormKeyDown(Sender: TObject; var Key: word; Shift: TShiftState);
     procedure FormShow(Sender: TObject);
   private
-    sourceEditor: TSourceEditorInterface;
     selectedEditor: TSynEdit;
     FTestBaseURL: string;
     FTestKey: string;
     FTestError: string;
     FTestModels: TStringList;
+    // snapshot of the configuration, read by the worker thread
+    FCodeBaseURL: string;
+    FCodeKey: string;
+    FCodeModel: string;
+    FCodePrompt: string;
+    FCodeError: string;
+    FCodeBusy: boolean;
     procedure DoTestConnection(Sender: TObject);
     procedure OnTestConnectionDone(Sender: TObject);
     procedure log(const Msg: string; AFileName: string = '';
@@ -53,9 +59,11 @@ type
   public
     Question: string;
     ResponseAsString: string;
-    ResponseAsJson: TJSONData;
     destructor Destroy; override;
     procedure Prepare;
+    // asks the model for AQuestion and inserts the answer into the active
+    // editor; the request runs in a worker thread
+    function AskFastCode(const AQuestion: string): boolean;
     procedure DoFastCode(Sender: TObject);
     procedure OnSuccessFastCode(Sender: TObject);
   end;
@@ -68,7 +76,7 @@ function NormalizeOpenAIBaseURL(const AUrl: string): string;
 
 implementation
 
-uses config_lib, de_common;
+uses config_lib, de_common, tools_lib;
 
 function NormalizeOpenAIBaseURL(const AUrl: string): string;
 begin
@@ -80,30 +88,14 @@ begin
 end;
 
 function GetFastCodeSuggestion(AQuestion: string): string;
-var
-  openaiKey, openaiBaseURL, prompt: string;
 begin
   Result := '';
-
-  if AQuestion.IsEmpty then Exit;
-  LoadConfiguration;
-  openaiKey := GlobalConfig['fastcode/openai_api_key'];
-  openaiBaseURL := GlobalConfig['fastcode/openai_base_url'];
-  prompt := GlobalConfig['fastcode/prompt'];
-  if openaiKey.IsEmpty and (NormalizeOpenAIBaseURL(openaiBaseURL) = OPENAI_BASEURL) then
-  begin
-    Result := 'OpenAI not found';
-    ShowMessage('OpenAI Key not found. '#13'Please fill in the key from the "FastPlaz/Fast Code Configuration" menu');
+  if AQuestion.IsEmpty then
     Exit;
-  end;
-
-  fFastCodeConfiguration.Question := AQuestion;
-  fFastCodeConfiguration.edt_OpenAIKey.Text := openaiKey;
-  fFastCodeConfiguration.edt_OpenAIBaseURL.Text := openaiBaseURL;
-  fFastCodeConfiguration.cbbModel.Text := GlobalConfig['fastcode/openai_model'];
-  fFastCodeConfiguration.mem_Prompt.Text := prompt;
-  Call(@fFastCodeConfiguration.DoFastCode, @fFastCodeConfiguration.OnSuccessFastCode);
-
+  if not Assigned(fFastCodeConfiguration) then
+    fFastCodeConfiguration := TfFastCodeConfiguration.Create(nil);
+  if fFastCodeConfiguration.AskFastCode(AQuestion) then
+    Result := 'asking';
 end;
 
 {$R *.lfm}
@@ -150,78 +142,112 @@ begin
   edt_ClosingChar.Text := GlobalConfig['fastcode/closing_char'];
 end;
 
-procedure TfFastCodeConfiguration.DoFastCode(Sender: TObject);
+function TfFastCodeConfiguration.AskFastCode(const AQuestion: string): boolean;
 var
-  prompt: string;
-  msg: TJSONObject;
+  sourceEditor: TSourceEditorInterface;
+  language: string;
 begin
-  sourceEditor := SourceEditorManagerIntf.ActiveEditor;
-  if sourceEditor = nil then Exit;
-  if not (sourceEditor.EditorControl is TSynEdit) then Exit;
-  selectedEditor := TSynEdit(sourceEditor.EditorControl);
-
-  log('thingking ....');
-  if Assigned(ResponseAsJson) then ResponseAsJson.Free;
-  with TOpenAIIntegration.Create do
+  Result := False;
+  if FCodeBusy then
   begin
-    BaseURL := NormalizeOpenAIBaseURL(edt_OpenAIBaseURL.Text);
-    Key := edt_OpenAIKey.Text;
-    if not Trim(cbbModel.Text).IsEmpty then
-      Model := Trim(cbbModel.Text);
-    prompt := mem_Prompt.Text;
-    prompt := prompt.Replace('%language%', edt_Language.Text).Trim;
-    if not prompt.IsEmpty then
-    begin
-      Messages.Clear;
-      msg := TJSONObject.Create;
-      msg.Add('role', 'system');
-      msg.Add('content', prompt);
-      Messages.Add(msg);
-    end;
-
-    // OnSyncStatus := @openAISync;
-    ResponseAsString := '';
-    if ChatCompletion(Question) then
-    begin
-      ResponseAsString := Response.AsJSON;
-      ResponseAsJson := GetJSON(ResponseAsString, False);
-    end;
-
-    log('I get a response.');
-    Free;
+    log('Fast Code is still waiting for the previous answer');
+    Exit;
   end;
 
-  // pengulangan dari 1 sampai 5
+  sourceEditor := SourceEditorManagerIntf.ActiveEditor;
+  if (sourceEditor = nil) or not (sourceEditor.EditorControl is TSynEdit) then
+    Exit;
+  selectedEditor := TSynEdit(sourceEditor.EditorControl);
 
+  // everything the worker thread needs is read here, in the main thread
+  LoadConfiguration;
+  FCodeKey := Trim(GlobalConfig['fastcode/openai_api_key']);
+  FCodeBaseURL := NormalizeOpenAIBaseURL(GlobalConfig['fastcode/openai_base_url']);
+  FCodeModel := Trim(GlobalConfig['fastcode/openai_model']);
+  language := GlobalConfig['fastcode/language'];
+  FCodePrompt := string(GlobalConfig['fastcode/prompt']).Replace('%language%', language).Trim;
+  if FCodeKey.IsEmpty and (FCodeBaseURL = OPENAI_BASEURL) then
+  begin
+    ShowMessage('OpenAI Key not found. '#13'Please fill in the key from the "FastPlaz/Fast Code Configuration" menu');
+    Exit;
+  end;
+
+  Question := AQuestion;
+  ResponseAsString := '';
+  FCodeError := '';
+  log('thinking ...');
+  FCodeBusy := Call(@DoFastCode, @OnSuccessFastCode);
+  if not FCodeBusy then
+    log('Unable to start the Fast Code thread', '', mluError);
+  Result := FCodeBusy;
+end;
+
+// runs in a worker thread: no LCL, no IDE calls
+procedure TfFastCodeConfiguration.DoFastCode(Sender: TObject);
+var
+  msg: TJSONObject;
+begin
+  ResponseAsString := '';
+  FCodeError := '';
+  with TOpenAIIntegration.Create do
+  try
+    try
+      BaseURL := FCodeBaseURL;
+      Key := FCodeKey;
+      if not FCodeModel.IsEmpty then
+        Model := FCodeModel;
+      if not FCodePrompt.IsEmpty then
+      begin
+        Messages.Clear;
+        msg := TJSONObject.Create;
+        msg.Add('role', 'system');
+        msg.Add('content', FCodePrompt);
+        Messages.Add(msg);
+      end;
+
+      if ChatCompletion(Question) then
+        ResponseAsString := Response.AsJSON
+      else if Assigned(HttpResult) then
+        FCodeError := Format('HTTP %d', [HttpResult.ResultCode])
+      else
+        FCodeError := 'No response from server';
+    except
+      on E: Exception do
+        FCodeError := E.Message;
+    end;
+  finally
+    Free;
+  end;
 end;
 
 procedure TfFastCodeConfiguration.OnSuccessFastCode(Sender: TObject);
 var
   responseAsText: string;
 begin
-  log('formatting response...');
-  if ResponseAsString.IsEmpty then
+  FCodeBusy := False;
+  if not FCodeError.IsEmpty then
+  begin
+    log('Fast Code failed: ' + FCodeError, '', mluError);
+    Exit;
+  end;
+
+  responseAsText := FastCodeResponseText(ResponseAsString);
+  if responseAsText.IsEmpty then
   begin
     log('Sorry, I can''t figure this out yet');
     Exit;
   end;
 
+  if selectedEditor = nil then
+    Exit;
   try
-    responseAsText := ResponseAsJson.GetPath('choices[0].message.content').AsJSON;
-    responseAsText := responseAsText.Trim('"');
-    responseAsText := responseAsText.Replace('```', '', [rfReplaceAll]);
-    responseAsText := responseAsText.Replace('\n', #13, [rfReplaceAll]);
-    responseAsText := responseAsText.Replace('\"', '"', [rfReplaceAll]);
-    selectedEditor.InsertTextAtCaret(#13 + edt_OpeningChar.Text + #13 +
-      responseAsText + #13 + edt_ClosingChar.Text + #13);
+    selectedEditor.InsertTextAtCaret(LineEnding + edt_OpeningChar.Text + LineEnding +
+      responseAsText + LineEnding + edt_ClosingChar.Text + LineEnding);
     log('done...');
   except
     on E: Exception do
-    begin
-      log('Failed, I got exception: ' + E.Message);
-    end;
+      log('Failed, I got exception: ' + E.Message, '', mluError);
   end;
-
 end;
 
 procedure TfFastCodeConfiguration.FormClose(Sender: TObject;

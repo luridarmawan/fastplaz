@@ -91,18 +91,16 @@ resourcestring
   rsDBExplorer = 'DB Explorer';
   rsViewDBConnector = 'View DB Connector';
   rsConfirmation = 'Confirmation';
+  // deliberately inverted: the default button (Yes/Enter) cancels, so an
+  // accidental Enter never drops data or removes a connection
   rsAskCancelDangerOperation = 'I will cancel this danger operation (drop/delete)?';
-  rsAskCancelOperation = 'I will cancel this operation (drop/delete)?';
+  rsAskCancelOperation = 'I will cancel this operation (delete connection "%s")?';
 
   // json tools
   rsJsonSEmpty   = 'Empty document';
   rsJsonSArray   = 'Array (%d elements)';
   rsJsonSObject  = 'Object (%d members)';
   rsJsonSNull    = 'null';
-
-type
-  TOnSQLCallback = procedure(const AStatus: integer; const AMessage: string;
-    var AQuery: TSQLQuery) of object;
 
 var
   GlobalConfig,
@@ -117,18 +115,22 @@ procedure LoadConfiguration;
 implementation
 
 function preg_match(const ARegexExpression: string; AText: string): boolean;
+var
+  re: TRegExpr;
 begin
   Result := False;
+  re := TRegExpr.Create;
   try
-    with TRegExpr.Create do
-    begin
-      Expression := ARegexExpression;
-      Result := Exec(AText);
-      Free;
+    try
+      re.Expression := ARegexExpression;
+      Result := re.Exec(AText);
+    except
+      on E: Exception do
+        Result := False;
     end;
-  except
+  finally
+    re.Free;
   end;
-
 end;
 
 procedure InserTextToEditor(const AText: string);
@@ -169,13 +171,8 @@ begin
 end;
 
 procedure ViewDBConnector(Sender: TObject);
-var
-  Pkg: TIDEPackage;
 begin
   IDEWindowCreators.ShowForm(FDE_WINDOW_NAME, True);
-  //if IDEFDEWindow <> nil then
-  //begin
-  //end;
 end;
 
 procedure LoadConfiguration;

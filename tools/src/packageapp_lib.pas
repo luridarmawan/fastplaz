@@ -17,10 +17,9 @@ type
   { TPackageAppLib }
 
   TPackageAppLib = class
-  private
-    ProjectName: string;
   public
-    constructor Create;
+    // Copies templates/packages/<APackageName> into TargetDirectory,
+    // %projectname% in file names becomes AProjectName.
     function GenerateStructure(TargetDirectory: string; APackageName: string;
       AProjectName: string = 'fastplaz'): boolean;
   end;
@@ -31,7 +30,6 @@ type
   private
   public
     constructor Create; override;
-    destructor Destroy; override;
     function GetLocalizedName: string; override;
     function GetLocalizedDescription: string; override;
     function InitProject(AProject: TLazProject): TModalResult; override;
@@ -40,10 +38,11 @@ type
 
 implementation
 
-uses fastplaz_tools_register, packageapp_wzd, menu_experts;
+uses fastplaz_tools_register, tools_lib, menu_experts;
 
 const
-  CSS_PACKAGESTRUCTURE_FAILED = 'Failed create directory structure';
+  CSS_PACKAGESTRUCTURE_FAILED = 'Failed to create the directory structure';
+  CSS_PACKAGE_NOT_FOUND = 'Package template not found: ';
 
 { TPackageAppDescriptor }
 
@@ -51,11 +50,6 @@ constructor TPackageAppDescriptor.Create;
 begin
   inherited Create;
   Name := 'FFastPlazPackageApplication';
-end;
-
-destructor TPackageAppDescriptor.Destroy;
-begin
-  inherited Destroy;
 end;
 
 function TPackageAppDescriptor.GetLocalizedName: string;
@@ -70,7 +64,6 @@ end;
 
 function TPackageAppDescriptor.InitProject(AProject: TLazProject): TModalResult;
 begin
-  //Result := inherited InitProject(AProject);
   CreatePackage_Proc(nil);
   Result := mrCancel;
 end;
@@ -80,31 +73,29 @@ end;
 function TPackageAppLib.GenerateStructure(TargetDirectory: string;
   APackageName: string; AProjectName: string): boolean;
 var
-  Pkg: TIDEPackage;
-  fastplazPackageDir: string;
+  templateDir: string;
 begin
+  Result := False;
   TargetDirectory := IncludeTrailingPathDelimiter(TargetDirectory);
-  if not ForceDirectoriesUTF8(TargetDirectory) then
+  if not ForceDirectories(TargetDirectory) then
   begin
-    ShowMessage(CSS_PACKAGESTRUCTURE_FAILED);
-    exit;
+    ShowMessage(CSS_PACKAGESTRUCTURE_FAILED + LineEnding + TargetDirectory);
+    Exit;
   end;
 
-  Pkg := PackageEditingInterface.FindPackageWithName('fastplaz_tools');
-  fastplazPackageDir := Pkg.DirectoryExpanded;
-  ScanDirAndCopy(fastplazPackageDir + DirectorySeparator + 'templates' +
-    DirectorySeparator + 'packages' + DirectorySeparator + APackageName +
-    DirectorySeparator + '*',
-    TargetDirectory, AProjectName);
+  templateDir := PackageDirectory(FASTPLAZ_TOOLS_PACKAGE);
+  if templateDir <> '' then
+    templateDir := templateDir + 'templates' + DirectorySeparator + 'packages' +
+      DirectorySeparator + APackageName;
+  if (templateDir = '') or (not DirectoryExists(templateDir)) then
+  begin
+    ShowMessage(CSS_PACKAGE_NOT_FOUND + templateDir);
+    Exit;
+  end;
+
+  Result := CopyDirectory(templateDir, TargetDirectory, AProjectName);
+  // the version file belongs to the template, not to the new application
   DeleteFile(TargetDirectory + 'version.json');
 end;
 
-constructor TPackageAppLib.Create;
-begin
-end;
-
-
 end.
-
-
-

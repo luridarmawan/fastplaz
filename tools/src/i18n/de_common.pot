@@ -6,7 +6,8 @@ msgid "I will cancel this danger operation (drop/delete)?"
 msgstr ""
 
 #: de_common.rsaskcanceloperation
-msgid "I will cancel this operation (drop/delete)?"
+#, object-pascal-format
+msgid "I will cancel this operation (delete connection \"%s\")?"
 msgstr ""
 
 #: de_common.rsconfirmation

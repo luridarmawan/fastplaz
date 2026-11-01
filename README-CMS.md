@@ -147,6 +147,7 @@ CSRF
     begin
       ThemeUtil.FlashMessages:= 'Security: Invalid CSRF Token';
       Redirect( BaseURL);
+      Exit; // Redirect only sends the response, it does not leave the method
     end;
   end;
 ```

@@ -11,4 +11,4 @@ echo "Compiling (instantfpc)..."
 if [ $# -eq 0 ]; then
   set -- -a
 fi
-exec instantfpc regex_tester_test.lpr "$@"
+exec instantfpc tools_test.lpr "$@"
