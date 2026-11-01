@@ -1,5 +1,32 @@
 # Development Changes
 
+## 20261101
+
+Review and fix pass over `FastPlaz/src` and `tools/src`, with an FPCUnit suite for every library unit. Read [UPGRADE.md](UPGRADE.md) before upgrading: some changes alter how an application behaves.
+
+Behaviour changes:
+- session: timeout is in minutes (the 3 day default expired after 72 minutes); default directory `<TEMP>/sessions`
+- model: a failed `Save`/`Delete`/`SoftDelete` returns False with `Message` instead of ending the request
+- theme: `[flashmessages]` is HTML encoded, `[flashmessages html=1]` keeps markup
+- common: `X-Forwarded-For`/`Client-IP` are only used with `systems/trust_proxy`
+- recaptcha: v1 API removed, the widget is always v2
+- integration: discontinued services marked deprecated (bmkg, clarifai, googleanalytics, kloudless, newrelic, office365, yandex, zomato)
+
+New Feature/Library:
+- model: `QuoteIdentifier`, `QuoteValue`, quoted table and alias names, `SoftDelete`
+- theme: `escape` filter, rewritten `[if]`, nested `[foreach]`, per-session page cache
+- session: `RegenerateID`, HttpOnly/SameSite/Secure cookie
+- html: one CSRF token per form, constant time comparison
+- mailer: built-in SMTP client (`smtp_lib`), Cc/Bcc, `HeloName`
+- redis: IPv6, full RESP parsing, connect timeout
+- tools: name sanitising in the wizards, Database Explorer port and prefix, Fast Code for OpenAI-compatible servers
+
+Bug Fix:
+- handler: code after `die()` no longer runs during initialisation, 405 on unsupported method, CORS with credentials, header line breaks stripped
+- cms/app: compile again, exit after `Redirect`, SQL values quoted, CSRF checked
+- integration: destructors run (30 classes were missing `override`), responses no longer shared between calls
+- many leaks, double frees, XXE in rss_lib, endless loops in StripTags and the Nazief stemmer
+
 ## 20231222.1419
 
 
