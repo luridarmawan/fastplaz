@@ -39,6 +39,10 @@
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
+        <Filename Value="..\..\..\FastPlaz\test\fastplaz_testrunner.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
         <Filename Value="..\regex_tester_lib.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>
@@ -52,7 +56,7 @@
     </Target>
     <SearchPaths>
       <IncludeFiles Value="$(ProjOutDir);..\..\..\FastPlaz\src\library"/>
-      <OtherUnitFiles Value="..;..\..\..\FastPlaz\src\library"/>
+      <OtherUnitFiles Value="..;..\..\..\FastPlaz\src\library;..\..\..\FastPlaz\test"/>
       <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
     </SearchPaths>
     <Linking>

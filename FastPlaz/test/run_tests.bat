@@ -24,6 +24,7 @@ rem -B: always rebuild, the cache only tracks the main program source.
 rem The unit paths mirror tools\fastplaz_runtime.lpk.
 set "INSTANTFPCOPTIONS=-B -Fi.. -Fu..\..\tools\src -Fu..\src\systems -Fu..\src\library -Fu..\src\vendor -Fu..\src\app\about -Fu..\src\model -Fu..\src\util -Fu..\src\helper"
 
+echo Compiling (instantfpc)...
 if "%~1"=="" (
   instantfpc fastplaz_test.lpr -a
 ) else (

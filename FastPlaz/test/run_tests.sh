@@ -21,6 +21,7 @@ if [ -z "$SQLITE3_LIBRARY" ]; then
 fi
 [ -n "$SQLITE3_LIBRARY" ] && echo "SQLite library: $SQLITE3_LIBRARY"
 
+echo "Compiling (instantfpc)..."
 if [ $# -eq 0 ]; then
   set -- -a
 fi
