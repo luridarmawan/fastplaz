@@ -30,13 +30,19 @@ type
     function setTag(const Tag: string; const Content: string;
       EndTag: boolean = True): string;
     function setCsrfTokenHtml(const FormIDDefault: string = ''): string;
+    function NewCsrfToken(const AFormID: string): string;
   public
     constructor Create;
     destructor Destroy; override;
     property FormID: string read GetFormID;
+    // Forgets every CSRF token of the session.
     procedure ResetCSRF;
     function CSRF(const FormIDDefault: string = ''; AsHTML : boolean = true): string;
+    // True when the posted csrftoken belongs to the posted __formid (or to
+    // the last form rendered). With Force the tokens are reset afterwards.
     function CheckCSRF(Force: boolean = True): boolean;
+    // Compares a posted token with the session, no side effects.
+    function IsValidCsrfToken(const AToken: string; const AFormID: string = ''): boolean;
     function H1(const Content: string; Options: array of string): string;
     function H1(const Content: string): string;
     function Block(const Content: string; Options: array of string): string;
@@ -83,6 +89,10 @@ function StripTagsCustom(const Content: string; const TagStart: string;
   const TagEnd: string): string;
 function MoreLess(const Content: string; CharacterCount: integer = 100;
   Suffix: string = '...'): string;
+// Constant time string comparison for secrets such as CSRF tokens.
+function SecureEquals(const A, B: string): boolean;
+// Session key that stores the CSRF token of one form.
+function CsrfSessionKey(const AFormID: string): string;
 
 var
   HTMLUtil: THTMLUtil;
@@ -276,7 +286,39 @@ begin
 end;
 
 
-// prepare for next security feature
+function SecureEquals(const A, B: string): boolean;
+var
+  i, diff: integer;
+begin
+  // length mismatch is reported without comparing, the loop itself runs
+  // over the whole string regardless of where the first difference is
+  if (Length(A) <> Length(B)) or (A = '') then
+    Exit(False);
+  diff := 0;
+  for i := 1 to Length(A) do
+    diff := diff or (Ord(A[i]) xor Ord(B[i]));
+  Result := diff = 0;
+end;
+
+function CsrfSessionKey(const AFormID: string): string;
+begin
+  Result := __HTML_CSRF_TOKEN_KEY;
+  if AFormID <> '' then
+    Result := Result + ':' + AFormID;
+end;
+
+// Issues a fresh token for AFormID. Each form keeps its own token in the
+// session (a page with two forms used to invalidate the first one), and
+// __HTML_CSRF_TOKEN_KEY still holds the last token for older callers.
+function THTMLUtil.NewCsrfToken(const AFormID: string): string;
+begin
+  Result := RandomString(__HTMLLIB_FORMCSRFTOKEN_LENGTH, AFormID);
+  _SESSION[__HTML_CSRF_TOKEN_KEY] := Result;
+  if AFormID <> '' then
+    _SESSION[CsrfSessionKey(AFormID)] := Result;
+  SessionController.ForceUpdate;
+end;
+
 function THTMLUtil.setCsrfTokenHtml(const FormIDDefault: string): string;
 var
   s, key: string;
@@ -284,11 +326,9 @@ begin
   s := FormIDDefault;
   if s = '' then
     s := FormID;
-  key := RandomString(__HTMLLIB_FORMCSRFTOKEN_LENGTH, s);
-  _SESSION[__HTML_CSRF_TOKEN_KEY] := key;
-  Result := #13'<input type="hidden" name="csrftoken" value="' + key +
-    '" id="FormCsrfToken_' + s + '" />';
-  SessionController.ForceUpdate;
+  key := NewCsrfToken(s);
+  Result := #13'<input type="hidden" name="csrftoken" value="' + HTMLEncode(key) +
+    '" id="FormCsrfToken_' + HTMLEncode(s) + '" />';
 end;
 
 function THTMLUtil.CSRF(const FormIDDefault: string; AsHTML: boolean): string;
@@ -296,41 +336,46 @@ begin
   if AsHTML then
     Result := setCsrfTokenHtml(FormIDDefault)
   else
-  begin
-    Result := RandomString(__HTMLLIB_FORMCSRFTOKEN_LENGTH, FormIDDefault);
-    _SESSION[__HTML_CSRF_TOKEN_KEY] := Result;
-    SessionController.ForceUpdate;
-  end;
+    Result := NewCsrfToken(FormIDDefault);
+end;
+
+function THTMLUtil.IsValidCsrfToken(const AToken: string; const AFormID: string): boolean;
+begin
+  Result := False;
+  if AToken = '' then
+    Exit;
+  if AFormID <> '' then
+    Result := SecureEquals(AToken, _SESSION[CsrfSessionKey(AFormID)]);
+  if not Result then
+    Result := SecureEquals(AToken, _SESSION[__HTML_CSRF_TOKEN_KEY]);
 end;
 
 function THTMLUtil.CheckCSRF(Force: boolean): boolean;
-var
-  key: string;
 begin
   Result := False;
-  key := _SESSION[__HTML_CSRF_TOKEN_KEY];
   if _POST['csrftoken'] = '' then
   begin
     if not Force then
-    begin
       Result := True;
-    end;
     Exit;
   end;
 
-  if key = _POST['csrftoken'] then
-  begin
-    Result := True;
-    ;
-  end;
+  Result := IsValidCsrfToken(_POST['csrftoken'], _POST['__formid']);
 
   if Force then
     ResetCSRF;
 end;
 
 procedure THTMLUtil.ResetCSRF;
+var
+  postedFormId: string;
 begin
   _SESSION[__HTML_CSRF_TOKEN_KEY] := '';
+  postedFormId := _POST['__formid'];
+  if postedFormId <> '' then
+    SessionController.DeleteKey(CsrfSessionKey(postedFormId));
+  if FFormID <> '' then
+    SessionController.DeleteKey(CsrfSessionKey(FFormID));
   SessionController.DeleteKey(__HTML_CSRF_TOKEN_KEY_FAILEDCOUNT);
 end;
 

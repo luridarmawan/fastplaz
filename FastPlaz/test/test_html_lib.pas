@@ -36,6 +36,8 @@ type
     procedure TestImgEscapes;
     procedure TestSelectNilDataset;
     procedure TestSimpleTags;
+    procedure TestSecureEquals;
+    procedure TestCsrfSessionKey;
   end;
 
 implementation
@@ -182,6 +184,22 @@ begin
   AssertEquals('<span class="c">t</span>', Span('t', 'c'));
   AssertEquals('<div>t</div>', Block('t'));
   AssertEquals('<div id="i" >t</div>', Block('t', '', 'i'));
+end;
+
+procedure THTMLLibTest.TestSecureEquals;
+begin
+  AssertTrue(SecureEquals('abc123', 'abc123'));
+  AssertFalse(SecureEquals('abc123', 'abc124'));
+  AssertFalse(SecureEquals('abc', 'abcd'));
+  AssertFalse('empty never matches', SecureEquals('', ''));
+  AssertFalse(SecureEquals('', 'x'));
+end;
+
+procedure THTMLLibTest.TestCsrfSessionKey;
+begin
+  AssertEquals(__HTML_CSRF_TOKEN_KEY, CsrfSessionKey(''));
+  AssertEquals(__HTML_CSRF_TOKEN_KEY + ':f1', CsrfSessionKey('f1'));
+  AssertTrue(CsrfSessionKey('a') <> CsrfSessionKey('b'));
 end;
 
 initialization

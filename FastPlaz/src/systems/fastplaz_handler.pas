@@ -817,8 +817,8 @@ begin
   if _POST['csrftoken'] = '' then
     Exit;
 
-  if _POST['csrftoken'] = _SESSION[__HTML_CSRF_TOKEN_KEY] then
-    Result := True;
+  // per form token (or the last issued one), constant time comparison
+  Result := HTMLUtil.IsValidCsrfToken(_POST['csrftoken'], _POST['__formid']);
 
   if Result then
   begin
