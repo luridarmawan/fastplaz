@@ -22,7 +22,7 @@ if defined SQLITE3_LIBRARY echo SQLite library: %SQLITE3_LIBRARY%
 rem instantfpc does not accept -Fu paths on its command line, pass them here.
 rem -B: always rebuild, the cache only tracks the main program source.
 rem The unit paths mirror tools\fastplaz_runtime.lpk.
-set "INSTANTFPCOPTIONS=-B -Fi.. -Fu..\..\tools\src -Fu..\src\systems -Fu..\src\library -Fu..\src\vendor -Fu..\src\app\about -Fu..\src\model -Fu..\src\util -Fu..\src\helper"
+set "INSTANTFPCOPTIONS=-B -Fi.. -Fu..\..\tools\src -Fu..\src\systems -Fu..\src\library -Fu..\src\vendor -Fu..\src\app\about -Fu..\src\model -Fu..\src\util -Fu..\src\helper -Fu..\src\integration"
 
 echo Compiling (instantfpc)...
 if "%~1"=="" (

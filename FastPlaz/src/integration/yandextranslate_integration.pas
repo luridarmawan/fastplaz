@@ -79,8 +79,6 @@ const
   TRANSLATE_CACHE_PATH = 'ztemp/cache/translate/';
   TRANSLATE_CACHE_EXTENSION = '.txt';
 
-var
-  Response: IHTTPResponse;
 
 { TYandexTranslateIntegration }
 
@@ -111,10 +109,12 @@ destructor TYandexTranslateIntegration.Destroy;
 begin
   if Assigned(jsonData) then
     jsonData.Free;
+  inherited Destroy;
 end;
 
 function TYandexTranslateIntegration.Detect(AText: string): string;
 var
+  Response: IHTTPResponse;
   url: string;
 begin
   Result := '';
@@ -131,15 +131,17 @@ begin
   url := url + '&text=' + UrlEncode(AText);
 
   with THTTPLib.Create(url) do
-  begin
+  try
     Response := Get;
     FResultCode := Response.ResultCode;
     FResultText := Response.ResultText;
     if Response.ResultCode = 200 then
     begin
+      FreeAndNil(jsonData);
       jsonData := GetJSON(Response.ResultText);
       Result := getData('lang');
     end;
+  finally
     Free;
   end;
 
@@ -147,6 +149,7 @@ end;
 
 function TYandexTranslateIntegration.Translate(ALang, AText: string): string;
 var
+  Response: IHTTPResponse;
   filename, url: string;
 begin
   Result := '';
@@ -172,18 +175,20 @@ begin
   url := url + '&text=' + UrlEncode(AText);
 
   with THTTPLib.Create(url) do
-  begin
+  try
     Response := Get;
     FResultCode := Response.ResultCode;
     FResultText := Response.ResultText;
     if Response.ResultCode = 200 then
     begin
+      FreeAndNil(jsonData);
       jsonData := GetJSON(Response.ResultText);
       Result := getData('text[0]');
 
       if FCache then
         SaveToFile(filename, Result);
     end;
+  finally
     Free;
   end;
 
