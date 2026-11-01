@@ -1,12 +1,13 @@
 msgid ""
 msgstr "Content-Type: text/plain; charset=UTF-8"
 
-#: de_common.rsaskcanceldangeroperation
-msgid "I will cancel this danger operation (drop/delete)?"
+#: de_common.rsaskdeleteconnection
+#, object-pascal-format
+msgid "Delete the connection \"%s\"?"
 msgstr ""
 
-#: de_common.rsaskcanceloperation
-msgid "I will cancel this operation (drop/delete)?"
+#: de_common.rsaskrundangeroperation
+msgid "Run this dangerous query (drop/delete)?"
 msgstr ""
 
 #: de_common.rsconfirmation
