@@ -248,7 +248,20 @@ function McpHostOf(const AValue: string): string;
 function McpErrorJSON(const AIdJSON: string; ACode: integer;
   const AMessage: string): string;
 
+{ A JSON number for AValue, as short as it can be while it still reads back
+  as the same double: 5 -> "5", 0.1 -> "0.1". fpjson writes every float as
+  "5.0000000000000000E+000". NaN and infinity, which JSON cannot hold,
+  become "null". }
+function McpFloatJSON(AValue: double): string;
+
+{ AData as JSON text, laid out like fpjson's AsJSON but with floats written
+  by McpFloatJSON. The result carries UTF-8 bytes like every FastPlaz
+  string. }
+function McpJSONText(AData: TJSONData): string;
+
 implementation
+
+uses Math;
 
 var
   GlobalServer: TMcpServer = nil;
@@ -344,6 +357,109 @@ begin
   Result := r;
 end;
 
+function McpFloatJSON(AValue: double): string;
+var
+  fs: TFormatSettings;
+  p, e, i: integer;
+  neg: boolean;
+  s, digits, rest: string;
+begin
+  if IsNan(AValue) or IsInfinite(AValue) then
+    Exit('null');
+  fs := DefaultFormatSettings;
+  fs.DecimalSeparator := '.';
+  // FPC gives at most 15 significant digits here, enough for most values
+  Result := FloatToStrF(AValue, ffGeneral, 15, 0, fs);
+  if StrToFloatDef(Result, NaN, fs) = AValue then
+    Exit;
+
+  // 17 significant digits always read back: " 3.3333333333333331E-001"
+  Str(AValue, s);
+  s := Trim(s);
+  p := Pos('E', s);
+  if p = 0 then
+    Exit(s);
+  e := StrToIntDef(StringReplace(Copy(s, p + 1, MaxInt), '+', '', []), 0);
+  s := Copy(s, 1, p - 1);
+  neg := (s <> '') and (s[1] = '-');
+  if neg then
+    Delete(s, 1, 1);
+  digits := StringReplace(s, '.', '', []);
+  i := Length(digits);
+  while (i > 1) and (digits[i] = '0') do
+    Dec(i);
+  SetLength(digits, i);
+
+  if (e >= 0) and (e < 17) then
+  begin
+    while Length(digits) < e + 1 do
+      digits := digits + '0';
+    Result := Copy(digits, 1, e + 1);
+    rest := Copy(digits, e + 2, MaxInt);
+    if rest <> '' then
+      Result := Result + '.' + rest;
+  end
+  else if (e < 0) and (e >= -5) then
+    Result := '0.' + StringOfChar('0', -e - 1) + digits
+  else
+  begin
+    Result := digits[1];
+    if Length(digits) > 1 then
+      Result := Result + '.' + Copy(digits, 2, MaxInt);
+    Result := Result + 'E' + IntToStr(e);
+  end;
+  if neg then
+    Result := '-' + Result;
+end;
+
+// fpjson's AsJSON layout, floats through McpFloatJSON
+function JSONTextOf(AData: TJSONData): TJSONStringType;
+var
+  i: integer;
+begin
+  if not Assigned(AData) then
+    Exit('null');
+  case AData.JSONType of
+    jtNumber:
+      if TJSONNumber(AData).NumberType = ntFloat then
+        Result := McpFloatJSON(AData.AsFloat)
+      else
+        Result := AData.AsJSON;
+    jtArray:
+    begin
+      Result := '[';
+      for i := 0 to AData.Count - 1 do
+      begin
+        if i > 0 then
+          Result := Result + ', ';
+        Result := Result + JSONTextOf(AData.Items[i]);
+      end;
+      Result := Result + ']';
+    end;
+    jtObject:
+    begin
+      if AData.Count = 0 then
+        Exit('{}');
+      Result := '{ ';
+      for i := 0 to AData.Count - 1 do
+      begin
+        if i > 0 then
+          Result := Result + ', ';
+        Result := Result + '"' + StringToJSONString(TJSONObject(AData).Names[i]) +
+          '" : ' + JSONTextOf(AData.Items[i]);
+      end;
+      Result := Result + ' }';
+    end;
+    else
+      Result := AData.AsJSON;
+  end;
+end;
+
+function McpJSONText(AData: TJSONData): string;
+begin
+  Result := FromJ(JSONTextOf(AData));
+end;
+
 function JStr(AObject: TJSONObject; const AName: string;
   const ADefault: string = ''): string;
 var
@@ -407,7 +523,7 @@ begin
     end;
     msg.Add('id', id);
     msg.Add('error', err);
-    Result := FromJ(msg.AsJSON);
+    Result := McpJSONText(msg);
   finally
     msg.Free;
   end;
@@ -422,7 +538,7 @@ begin
     msg.Add('jsonrpc', '2.0');
     msg.Add('id', GetJSON(ToJ(AIdJSON)));
     msg.Add('result', AResult);
-    Result := FromJ(msg.AsJSON);
+    Result := McpJSONText(msg);
   finally
     msg.Free;
   end;
@@ -524,7 +640,7 @@ begin
     Exit;
   end;
   try
-    Finish(FromJ(AData.AsJSON));
+    Finish(McpJSONText(AData));
     if (AData.JSONType = jtObject) and not Assigned(FStructured) then
     begin
       FStructured := TJSONObject(AData);
@@ -588,9 +704,9 @@ begin
     FTools[n].Name := AName;
     FTools[n].Title := ATitle;
     FTools[n].Description := ADescription;
-    FTools[n].InputSchema := FromJ(schema.AsJSON);
+    FTools[n].InputSchema := McpJSONText(schema);
     if Assigned(output) then
-      FTools[n].OutputSchema := FromJ(output.AsJSON)
+      FTools[n].OutputSchema := McpJSONText(output)
     else
       FTools[n].OutputSchema := '';
     FTools[n].Hints := AHints;
@@ -970,7 +1086,7 @@ begin
       Exit(mmkInvalid);
     end;
     if Assigned(idData) then
-      idJSON := FromJ(idData.AsJSON)
+      idJSON := McpJSONText(idData)
     else
       idJSON := 'null';
     if JStr(msg, 'jsonrpc') <> '2.0' then

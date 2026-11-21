@@ -41,6 +41,17 @@ Coding agent di dalam Lazarus IDE. Claude Code, OpenCode, Pi dan GitHub Copilot 
 
 [Selengkapnya tentang AI Agent Plane](#ai-agent-plane-1)
 
+### MCP server
+
+Buat **MCP (Model Context Protocol) server** sendiri dengan Pascal: daftarkan tool dalam beberapa baris, lalu AI agent seperti Claude Code memanggilnya lewat HTTP. Endpoint MCP jalan di kedua mode, standalone dan CGI, dengan bearer token opsional.
+
+```pascal
+McpServer.RegisterTool('greet', 'Greet', 'Says hello.',
+  '{"type":"object","properties":{"name":{"type":"string"}}}', @DoGreet);
+```
+
+[Panduan MCP server](docs/MCP-SERVER-GUIDE.md) · [Contoh](examples/mcp)
+
 ## Kenapa FastPlaz
 
 - **Cepat dan ringan.** Tanpa interpreter, tanpa runtime yang harus dipasang di server. Cukup satu binary dan file theme Anda.
@@ -106,7 +117,7 @@ Kebutuhan: [Free Pascal](https://www.freepascal.org/) 3.2.2 dan [Lazarus](https:
 
    ![Menu FastPlaz](docs/images/menu.png)
 
-3. **Buat project**: *File > New Project ... > Simple Application* (atau *API Application*). Pilih run mode HTTP.
+3. **Buat project**: *File > New Project ... > Simple Application* (atau *API Application*, *MCP Server Application*).
 
    ![Project baru](docs/images/menu-new-project.png)
 
@@ -127,8 +138,8 @@ Semuanya ada di menu FastPlaz.
 
 | Tool | Fungsi |
 | --- | --- |
-| Wizard project | Membuat Simple Application, API Application, Full Package Application, lengkap dengan struktur direktori dan theme |
-| Wizard controller dan model | Simple controller, API (JSON) controller, `TSimpleModel` untuk implementasi tabel |
+| Wizard project | Membuat Simple Application, API Application, MCP Server Application, Full Package Application, lengkap dengan struktur direktori dan theme |
+| Wizard controller dan model | Simple controller, API (JSON) controller, MCP controller, `TSimpleModel` untuk implementasi tabel |
 | Database Explorer | Akses ke database kamu langsung dari IDE Lazarus. termasuk menjalankan query dan juga menyalin daftar field ke kode |
 | JSON Validator & Formatter | Memeriksa dan merapikan JSON |
 | Regex Tester | Mencoba regular expression pada contoh teks |
@@ -163,6 +174,7 @@ Semuanya ada di menu FastPlaz.
   - [Template](README-use%20of%20templates.md)
   - [SimpleModel](README-use%20of%20simplemodel.md)
   - [REST](REST.md)
+  - [MCP server](docs/MCP-SERVER-GUIDE.md)
   - [Integrasi](integration.md)
   - [Package](README-package.md)
   - [CMS](README-CMS.md)

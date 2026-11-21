@@ -1,5 +1,21 @@
 # Development Changes
 
+## 20261121
+
+New Feature/Library:
+- mcp_server: MCP (Model Context Protocol) server core in `FastPlaz/src/mcp`, stateless Streamable HTTP (`POST /mcp`, JSON answer, no SSE). Tools with annotations and optional output schema, text resources, Origin check, optional bearer token, `MCP-Protocol-Version` check; thread-safe for standalone mode
+- mcp_handler: `TMcpController` serves the MCP endpoint in CGI and standalone mode; reads the `mcp` section of `config.json` (`token`, `env:NAME` token, `allowed_origins`, `exception_details`)
+- tools: File > New > FastPlaz > MCP Server Application, and FastPlaz > Create MCP Controller
+- examples/mcp: MCP server with `echo`, `add`, `server_time` and one resource; checked with Claude Code as client
+- docs: [MCP-SERVER-GUIDE.md](MCP-SERVER-GUIDE.md), how to add tools and resources, configure the token and connect a client
+- tools: the Simple package template `extra.cfg` includes `FastPlaz/src/mcp`
+- tools: the Simple, API and MCP project wizards write `extra.cfg` next to the program when the project is first saved, so it compiles from the console with `fpc @extra.cfg <project>.lpr` (FastPlaz unit paths relative to the project when on the same drive, `lib/<cpu>-<os>` created). An existing `extra.cfg` is kept; Lazarus and lazbuild still use the `fastplaz_runtime` package
+
+Bug Fix:
+- mcp_server: floats in answers are written short (`5`, `0.1`) instead of fpjson's `5.0000000000000000E+000`, also in the text of `FinishJSON`
+- theme: template files are read without `flock` on Unix; concurrent requests failed with `Unable to open file ...: Try again`
+- fastplaz_app: `DefaultSystemCodePage` is UTF-8 on every platform, so UTF-8 database text is no longer converted to the ANSI code page on Windows
+
 ## 20261110
 
 Behaviour changes:

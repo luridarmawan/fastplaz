@@ -16,6 +16,10 @@ Add tools in the controller unit, initialization section:
 Standalone mode serves requests in several threads: keep tool handlers free
 of shared state.
 
+CGI: Apache does not pass the Authorization header to CGI programs; the
+.htaccess of this project passes it with a rewrite rule. Keep that rule
+when a token is set.
+
 config/config.json, section "mcp":
   token              bearer token ("env:NAME" reads an environment variable)
   allowed_origins    browser origins allowed besides localhost and own host
@@ -27,4 +31,5 @@ curl -X POST http://127.0.0.1:17845/mcp -H "Content-Type: application/json" -d '
 Connect Claude Code:
 claude mcp add --transport http myserver http://127.0.0.1:17845/mcp
 
+Guide: docs/MCP-SERVER-GUIDE.md
 Example project: examples/mcp

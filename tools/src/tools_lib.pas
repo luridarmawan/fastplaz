@@ -92,6 +92,21 @@ function ConfigWithRunMode(const AConfigJSON: string; AMode: TAppRunMode): strin
 // not exist, is not a JSON object or cannot be written.
 function SetConfigRunMode(const AConfigFile: string; AMode: TAppRunMode): boolean;
 
+const
+  // FastPlaz source folders a program needs, the unit path of the
+  // fastplaz_runtime package (relative to the FastPlaz folder)
+  FASTPLAZ_RUNTIME_UNIT_DIRS: array[0..7] of string = ('src/systems',
+    'src/library', 'src/vendor', 'src/app/about', 'src/model', 'src/util',
+    'src/helper', 'src/mcp');
+
+// extra.cfg of a generated project, to compile it from the console with
+// "fpc @extra.cfg <AProjectName>.lpr" in the project directory. Lazarus and
+// lazbuild ignore the file and use the fastplaz_runtime package.
+// AFastPlazDir: the FastPlaz folder (define_fastplaz.inc, src/), ATarget:
+// the binary; both relative to the project directory or absolute.
+// Backslashes become "/", which fpc accepts on every platform.
+function FastPlazExtraCfg(const AProjectName, AFastPlazDir, ATarget: string): string;
+
 implementation
 
 const
@@ -436,6 +451,42 @@ begin
       on E: Exception do
         Result := False;
     end;
+  finally
+    lst.Free;
+  end;
+end;
+
+function FastPlazExtraCfg(const AProjectName, AFastPlazDir, ATarget: string): string;
+var
+  lst: TStringList;
+  dir: string;
+  i: integer;
+begin
+  dir := StringReplace(ExcludeTrailingPathDelimiter(AFastPlazDir), '\', '/', [rfReplaceAll]);
+  if dir = '' then
+    dir := '.';
+  lst := TStringList.Create;
+  try
+    lst.Add('# Compile from the console, in this directory:');
+    lst.Add('#   fpc @extra.cfg ' + AProjectName + '.lpr');
+    lst.Add('# Lazarus and lazbuild ignore this file and use the fastplaz_runtime');
+    lst.Add('# package. Written once by the FastPlaz project wizard; edit the paths');
+    lst.Add('# when FastPlaz or the project moves. The unit output directory');
+    lst.Add('# lib/<cpu>-<os> must exist, e.g. "mkdir -p lib/x86_64-linux".');
+    lst.Add('');
+    lst.Add('-MObjFPC');
+    lst.Add('-Scghi');
+    lst.Add('-FUlib/$FPCTARGET/');
+    lst.Add('-o' + StringReplace(ATarget, '\', '/', [rfReplaceAll]));
+    lst.Add('');
+    lst.Add('-Fu.');
+    lst.Add('-Fi' + dir);
+    for i := 0 to High(FASTPLAZ_RUNTIME_UNIT_DIRS) do
+      lst.Add('-Fu' + dir + '/' + FASTPLAZ_RUNTIME_UNIT_DIRS[i]);
+    lst.Add('');
+    lst.Add('#-O2');
+    lst.Add('#-g- -Xs');
+    Result := lst.Text;
   finally
     lst.Free;
   end;

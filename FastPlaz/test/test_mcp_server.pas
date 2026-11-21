@@ -12,7 +12,7 @@ unit test_mcp_server;
 interface
 
 uses
-  mcp_server, fpjson, jsonparser, Classes, SysUtils, fpcunit, testregistry;
+  mcp_server, fpjson, jsonparser, Classes, SysUtils, Math, fpcunit, testregistry;
 
 type
 
@@ -37,6 +37,8 @@ type
   published
     procedure TestValidToolName;
     procedure TestHostOf;
+    procedure TestFloatJSON;
+    procedure TestJSONText;
     procedure TestGlobalServer;
     procedure TestInitialize;
     procedure TestInitializeUnknownVersion;
@@ -47,6 +49,7 @@ type
     procedure TestToolCallText;
     procedure TestToolArguments;
     procedure TestToolCallJSON;
+    procedure TestToolCallJSONFloat;
     procedure TestToolMethodHandler;
     procedure TestToolError;
     procedure TestToolExceptionHidden;
@@ -111,6 +114,12 @@ end;
 procedure ToolArray(ACall: TMcpToolCall);
 begin
   ACall.FinishJSON(TJSONArray.Create([1, 2]));
+end;
+
+procedure ToolFloat(ACall: TMcpToolCall);
+begin
+  ACall.FinishJSON(TJSONObject.Create(['sum', ACall.Float('a') + ACall.Float('b'),
+    'ratio', 0.1, 'third', 1 / 3]));
 end;
 
 procedure ToolFail(ACall: TMcpToolCall);
@@ -293,6 +302,58 @@ begin
   AssertFalse('space', McpValidToolName('get weather'));
   AssertFalse('slash', McpValidToolName('a/b'));
   AssertFalse('non ascii', McpValidToolName('cuaca' + #$C3#$A9));
+end;
+
+procedure TMcpServerTest.TestFloatJSON;
+
+  procedure Check(AValue: double; const AExpected: string);
+  begin
+    AssertEquals(AExpected, AExpected, McpFloatJSON(AValue));
+  end;
+
+  procedure RoundTrip(AValue: double);
+  var
+    d: TJSONData;
+  begin
+    d := GetJSON(McpFloatJSON(AValue));
+    try
+      AssertTrue('reads back: ' + McpFloatJSON(AValue), d.AsFloat = AValue);
+    finally
+      d.Free;
+    end;
+  end;
+
+begin
+  Check(5, '5');
+  Check(-2.5, '-2.5');
+  Check(0.1, '0.1');
+  Check(0, '0');
+  Check(12345.678, '12345.678');
+  Check(1e20, '1E20');
+  Check(1.5e-7, '1.5E-7');
+  Check(1 / 3, '0.33333333333333331');
+  Check(0.1 + 0.2, '0.30000000000000004');
+  Check(123456789012345678.0, '1.2345678901234568E17');
+  Check(NaN, 'null');
+  Check(Infinity, 'null');
+  RoundTrip(1 / 3);
+  RoundTrip(-2 / 3 * 1e-3);
+  RoundTrip(2 / 3 * 1e300);
+  RoundTrip(Pi);
+end;
+
+procedure TMcpServerTest.TestJSONText;
+var
+  d: TJSONData;
+begin
+  d := GetJSON('{"a":1.5,"b":[2.0,3,"x",true,null],"c":{},"d":[],"e":{"f":0.25}}');
+  try
+    AssertEquals('{ "a" : 1.5, "b" : [2, 3, "x", true, null], "c" : {}, "d" : [], "e" : { "f" : 0.25 } }',
+      McpJSONText(d));
+  finally
+    d.Free;
+  end;
+  AssertEquals('null', McpJSONText(nil));
 end;
 
 procedure TMcpServerTest.TestHostOf;
@@ -527,6 +588,21 @@ begin
   try
     AssertEquals('[1, 2]', msg.FindPath('result.content[0].text').AsString);
     AssertNull(msg.FindPath('result.structuredContent'));
+  finally
+    msg.Free;
+  end;
+end;
+
+procedure TMcpServerTest.TestToolCallJSONFloat;
+var
+  msg: TJSONObject;
+begin
+  FServer.RegisterTool('float', '', 'Float', '', @ToolFloat);
+  msg := CallTool('float', '{"a":2,"b":3}');
+  try
+    AssertEquals('{ "sum" : 5, "ratio" : 0.1, "third" : 0.33333333333333331 }',
+      msg.FindPath('result.content[0].text').AsString);
+    AssertEquals(5, msg.FindPath('result.structuredContent.sum').AsFloat, 0);
   finally
     msg.Free;
   end;

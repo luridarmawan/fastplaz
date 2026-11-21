@@ -53,6 +53,16 @@ procedure OpenRuntimeReadme(const AReadmeName: string);
 // written when the file does not exist (web structure not generated).
 procedure ApplyServerConfig(const AWebRootDir: string);
 
+// A new project has no directory until it is saved, so SetupFastPlazProject
+// only remembers the project here: extra.cfg (see FastPlazExtraCfg) is
+// written next to the main file when that is saved for the first time. An
+// existing extra.cfg is never overwritten.
+procedure PlanExtraCfg(AProject: TLazProject; const AProjectName,
+  ATargetExecutable: string);
+
+// Installs the IDE handlers PlanExtraCfg needs; called from Register.
+procedure RegisterExtraCfgWriter;
+
 implementation
 
 uses fastplaz_tools_register, modsimple_lib, LazFileUtils, project_wzd, webstructure_lib,
@@ -133,6 +143,117 @@ begin
   AProject.LazCompilerOptions.TargetFilename := ATargetExecutable;
   AProject.LazCompilerOptions.ConfigFilePath := 'extra.cfg';
   AProject.Flags := AProject.Flags - [pfMainUnitHasCreateFormStatements];
+  PlanExtraCfg(AProject, AProjectName, ATargetExecutable);
+end;
+
+type
+
+  { TExtraCfgWriter }
+
+  TExtraCfgWriter = class
+  public
+    Project: TLazProject;
+    ProjectName: string;
+    Target: string;
+    function OnSaveEditorFile(Sender: TObject; aFile: TLazProjectFile;
+      SaveStep: TSaveEditorFileStep; TargetFilename: string): TModalResult;
+    function OnProjectClose(Sender: TObject; AProject: TLazProject): TModalResult;
+    procedure WriteCfg(const AProjectDir: string);
+  end;
+
+var
+  ExtraCfgWriter: TExtraCfgWriter = nil;
+
+function TExtraCfgWriter.OnSaveEditorFile(Sender: TObject;
+  aFile: TLazProjectFile; SaveStep: TSaveEditorFileStep;
+  TargetFilename: string): TModalResult;
+begin
+  Result := mrOk;
+  if (SaveStep <> sefsAfterWrite) or (Project = nil) then
+    Exit;
+  if LazarusIDE.ActiveProject <> Project then
+  begin
+    Project := nil;
+    Exit;
+  end;
+  if (aFile <> Project.MainFile) or not FilenameIsAbsolute(TargetFilename) then
+    Exit;
+  Project := nil;
+  try
+    WriteCfg(ExtractFilePath(TargetFilename));
+  except
+    on E: Exception do
+      log('extra.cfg: ' + E.Message, '', mluError);
+  end;
+end;
+
+function TExtraCfgWriter.OnProjectClose(Sender: TObject;
+  AProject: TLazProject): TModalResult;
+begin
+  Result := mrOk;
+  if AProject = Project then
+    Project := nil;
+end;
+
+procedure TExtraCfgWriter.WriteCfg(const AProjectDir: string);
+var
+  cfgFile, fastplazDir, binary, libDir: string;
+  lst: TStringList;
+begin
+  cfgFile := AProjectDir + 'extra.cfg';
+  if FileExists(cfgFile) then
+  begin
+    log('extra.cfg kept: ' + cfgFile, '', mluHint);
+    Exit;
+  end;
+  fastplazDir := PackageDirectory(FASTPLAZ_RUNTIME_PACKAGE);
+  if fastplazDir = '' then
+    Exit;
+  fastplazDir := ExpandFileName(fastplazDir + '..' + DirectorySeparator + 'FastPlaz');
+  if not DirectoryExists(fastplazDir) then
+  begin
+    log('extra.cfg not written, FastPlaz folder not found: ' + fastplazDir, '', mluWarning);
+    Exit;
+  end;
+  // relative paths keep the file usable when the tree is copied as a whole;
+  // CreateRelativePath gives the absolute path on another drive
+  fastplazDir := CreateRelativePath(fastplazDir, AProjectDir);
+  binary := Target;
+  if FilenameIsAbsolute(binary) then
+    binary := CreateRelativePath(binary, AProjectDir);
+
+  lst := TStringList.Create;
+  try
+    lst.Text := FastPlazExtraCfg(ProjectName, fastplazDir, binary);
+    lst.SaveToFile(cfgFile);
+  finally
+    lst.Free;
+  end;
+  // fpc does not create the unit output directory
+  libDir := AProjectDir + 'lib' + DirectorySeparator +
+    LowerCase({$I %FPCTARGETCPU%} + '-' + {$I %FPCTARGETOS%});
+  ForceDirectories(libDir);
+  log('Console build: fpc @extra.cfg ' + ProjectName + '.lpr (' + cfgFile + ')',
+    '', mluProgress);
+end;
+
+procedure PlanExtraCfg(AProject: TLazProject; const AProjectName,
+  ATargetExecutable: string);
+begin
+  if ExtraCfgWriter = nil then
+    Exit;
+  ExtraCfgWriter.Project := AProject;
+  ExtraCfgWriter.ProjectName := AProjectName;
+  ExtraCfgWriter.Target := ATargetExecutable;
+end;
+
+procedure RegisterExtraCfgWriter;
+begin
+  if ExtraCfgWriter <> nil then
+    Exit;
+  ExtraCfgWriter := TExtraCfgWriter.Create;
+  LazarusIDE.AddHandlerOnSaveEditorFile(@ExtraCfgWriter.OnSaveEditorFile);
+  LazarusIDE.AddHandlerOnProjectClose(@ExtraCfgWriter.OnProjectClose);
 end;
 
 procedure OpenRuntimeReadme(const AReadmeName: string);
@@ -253,5 +374,11 @@ begin
   Result := mrOk;
 end;
 
+initialization
+
+finalization
+  if Assigned(ExtraCfgWriter) and Assigned(LazarusIDE) then
+    LazarusIDE.RemoveAllHandlersOfObject(ExtraCfgWriter);
+  FreeAndNil(ExtraCfgWriter);
 
 end.
