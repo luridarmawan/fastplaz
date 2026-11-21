@@ -212,13 +212,17 @@ Apache answers `500`.
 
 ### Compile from the console
 
+The project wizards write an `extra.cfg` next to the program when the
+project is saved for the first time. It holds the FastPlaz unit paths
+(`src/mcp` included), the unit output directory and the binary:
+
 ```
-lazbuild myapp.lpi
+fpc @extra.cfg myapp.lpr
 ```
 
-A project compiled with `fpc` and an `extra.cfg` instead of the package
-needs `-Fu<fastplaz>/FastPlaz/src/mcp` next to the other FastPlaz unit
-paths.
+`lazbuild myapp.lpi` works too; it uses the `fastplaz_runtime` package and
+ignores `extra.cfg`. A hand-written `extra.cfg` needs
+`-Fu<fastplaz>/FastPlaz/src/mcp` next to the other FastPlaz unit paths.
 
 ## Connect a client
 

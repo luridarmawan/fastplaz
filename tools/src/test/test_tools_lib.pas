@@ -44,6 +44,7 @@ type
     procedure TestConfigWithRunModeKeepsServer;
     procedure TestConfigWithRunModeInvalid;
     procedure TestSetConfigRunMode;
+    procedure TestFastPlazExtraCfg;
   end;
 
 implementation
@@ -382,6 +383,37 @@ begin
   WriteText(fileName, 'not json');
   AssertFalse('invalid file', SetConfigRunMode(fileName, armCGI));
   AssertEquals('not json', Trim(ReadText(fileName)));
+end;
+
+procedure TToolsLibTest.TestFastPlazExtraCfg;
+var
+  lst: TStringList;
+  i: integer;
+begin
+  lst := TStringList.Create;
+  try
+    lst.Text := FastPlazExtraCfg('myapp', '..\..\fastplaz\FastPlaz\',
+      '..\public_html\myapp.bin');
+    AssertTrue('usage line', lst.IndexOf('#   fpc @extra.cfg myapp.lpr') >= 0);
+    AssertTrue('mode', lst.IndexOf('-MObjFPC') >= 0);
+    AssertTrue('unit output', lst.IndexOf('-FUlib/$FPCTARGET/') >= 0);
+    AssertTrue('target, slashes', lst.IndexOf('-o../public_html/myapp.bin') >= 0);
+    AssertTrue('project dir', lst.IndexOf('-Fu.') >= 0);
+    AssertTrue('include dir, no trailing slash',
+      lst.IndexOf('-Fi../../fastplaz/FastPlaz') >= 0);
+    for i := 0 to High(FASTPLAZ_RUNTIME_UNIT_DIRS) do
+      AssertTrue(FASTPLAZ_RUNTIME_UNIT_DIRS[i],
+        lst.IndexOf('-Fu../../fastplaz/FastPlaz/' + FASTPLAZ_RUNTIME_UNIT_DIRS[i]) >= 0);
+    AssertTrue('mcp unit path', lst.IndexOf('-Fu../../fastplaz/FastPlaz/src/mcp') >= 0);
+    for i := 0 to lst.Count - 1 do
+      AssertEquals('no backslash: ' + lst[i], 0, Pos('\', lst[i]));
+
+    lst.Text := FastPlazExtraCfg('app', 'D:\fp\FastPlaz', './app.bin');
+    AssertTrue('absolute dir', lst.IndexOf('-FuD:/fp/FastPlaz/src/systems') >= 0);
+    AssertTrue('relative target kept', lst.IndexOf('-o./app.bin') >= 0);
+  finally
+    lst.Free;
+  end;
 end;
 
 initialization

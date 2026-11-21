@@ -61,6 +61,7 @@ end;
 procedure Register;
 begin
   CreateIDEMenus;
+  RegisterExtraCfgWriter;
 
   RegisterNewItemCategory(TNewIDEItemCategory.Create(FastPlaz));
   RegisterProjectDescriptor(TProjectFastPlazDescriptor.Create, FastPlaz);
