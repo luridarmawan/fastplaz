@@ -41,6 +41,17 @@ Coding agents inside the Lazarus IDE. Claude Code, OpenCode, Pi and GitHub Copil
 
 [More about AI Agent Plane](#ai-agent-plane-1)
 
+### MCP servers
+
+Build your own **MCP (Model Context Protocol) server** in Pascal: register a tool in a few lines and AI agents such as Claude Code call it over HTTP. The MCP endpoint runs in both modes, standalone and CGI, with an optional bearer token.
+
+```pascal
+McpServer.RegisterTool('greet', 'Greet', 'Says hello.',
+  '{"type":"object","properties":{"name":{"type":"string"}}}', @DoGreet);
+```
+
+[MCP server guide](docs/MCP-SERVER-GUIDE.md) · [Example](examples/mcp)
+
 ## Why FastPlaz
 
 - **Native speed, tiny footprint.** No interpreter, no runtime to install on the server. One binary plus your theme files.
@@ -106,7 +117,7 @@ Requirements: [Free Pascal](https://www.freepascal.org/) 3.2.2 and [Lazarus](htt
 
    ![FastPlaz menu](docs/images/menu.png)
 
-3. **Create a project**: *File > New Project ... > Simple Application* (or *API Application*). Choose the HTTP run mode.
+3. **Create a project**: *File > New Project ... > Simple Application* (or *API Application*, *MCP Server Application*).
 
    ![New project](docs/images/menu-new-project.png)
 
@@ -127,8 +138,8 @@ Everything is in the FastPlaz menu.
 
 | Tool | What it does |
 | --- | --- |
-| Project wizards | Create a Simple Application, API Application, Full Package Application, with the directory and theme structure |
-| Controller and model wizards | Simple controller, API (JSON) controller, `TSimpleModel` to work with a table |
+| Project wizards | Create a Simple Application, API Application, MCP Server Application, Full Package Application, with the directory and theme structure |
+| Controller and model wizards | Simple controller, API (JSON) controller, MCP controller, `TSimpleModel` to work with a table |
 | Database Explorer | Access your databases straight from the Lazarus IDE, run queries and copy field lists into your code |
 | JSON Validator & Formatter | Check and pretty-print JSON |
 | Regex Tester | Try regular expressions against sample text |
@@ -163,6 +174,7 @@ Everything is in the FastPlaz menu.
   - [Templates](README-use%20of%20templates.md)
   - [SimpleModel](README-use%20of%20simplemodel.md)
   - [REST](REST.md)
+  - [MCP server](docs/MCP-SERVER-GUIDE.md)
   - [Integrations](integration.md)
   - [Packages](README-package.md)
   - [CMS](README-CMS.md)
