@@ -55,7 +55,8 @@ procedure ApplyServerConfig(const AWebRootDir: string);
 
 // A new project has no directory until it is saved, so SetupFastPlazProject
 // only remembers the project here: extra.cfg (see FastPlazExtraCfg) is
-// written next to the main file when that is saved for the first time. An
+// written next to the .lpi as soon as the project has a real file name
+// (a file of it is saved, Save All, or a build). An
 // existing extra.cfg is never overwritten.
 procedure PlanExtraCfg(AProject: TLazProject; const AProjectName,
   ATargetExecutable: string);
@@ -155,8 +156,11 @@ type
     Project: TLazProject;
     ProjectName: string;
     Target: string;
+    // writes extra.cfg once the remembered project has a directory
+    procedure TryWrite;
     function OnSaveEditorFile(Sender: TObject; aFile: TLazProjectFile;
       SaveStep: TSaveEditorFileStep; TargetFilename: string): TModalResult;
+    function OnSavedAll(Sender: TObject): TModalResult;
     function OnProjectClose(Sender: TObject; AProject: TLazProject): TModalResult;
     procedure WriteCfg(const AProjectDir: string);
   end;
@@ -164,27 +168,47 @@ type
 var
   ExtraCfgWriter: TExtraCfgWriter = nil;
 
-function TExtraCfgWriter.OnSaveEditorFile(Sender: TObject;
-  aFile: TLazProjectFile; SaveStep: TSaveEditorFileStep;
-  TargetFilename: string): TModalResult;
+procedure TExtraCfgWriter.TryWrite;
+var
+  lpiFile: string;
 begin
-  Result := mrOk;
-  if (SaveStep <> sefsAfterWrite) or (Project = nil) then
+  if Project = nil then
     Exit;
   if LazarusIDE.ActiveProject <> Project then
   begin
     Project := nil;
     Exit;
   end;
-  if (aFile <> Project.MainFile) or not FilenameIsAbsolute(TargetFilename) then
+  // a new project keeps a virtual .lpi name ("project1.lpi") until "Save
+  // Project As" sets the real one, which happens before its units are saved
+  lpiFile := Project.ProjectInfoFile;
+  if not FilenameIsAbsolute(lpiFile) then
     Exit;
   Project := nil;
   try
-    WriteCfg(ExtractFilePath(TargetFilename));
+    WriteCfg(ExtractFilePath(lpiFile));
   except
     on E: Exception do
       log('extra.cfg: ' + E.Message, '', mluError);
   end;
+end;
+
+// The main .lpr is saved without this event when it is not open in an
+// editor (Lazarus 4.x SaveProjectInfo), so every saved file counts: the
+// wizards always create routes.pas and a controller in the project.
+function TExtraCfgWriter.OnSaveEditorFile(Sender: TObject;
+  aFile: TLazProjectFile; SaveStep: TSaveEditorFileStep;
+  TargetFilename: string): TModalResult;
+begin
+  Result := mrOk;
+  if SaveStep = sefsAfterWrite then
+    TryWrite;
+end;
+
+function TExtraCfgWriter.OnSavedAll(Sender: TObject): TModalResult;
+begin
+  Result := mrOk;
+  TryWrite;
 end;
 
 function TExtraCfgWriter.OnProjectClose(Sender: TObject;
@@ -253,6 +277,8 @@ begin
     Exit;
   ExtraCfgWriter := TExtraCfgWriter.Create;
   LazarusIDE.AddHandlerOnSaveEditorFile(@ExtraCfgWriter.OnSaveEditorFile);
+  LazarusIDE.AddHandlerOnSavedAll(@ExtraCfgWriter.OnSavedAll);
+  LazarusIDE.AddHandlerOnProjectBuilding(@ExtraCfgWriter.OnSavedAll);
   LazarusIDE.AddHandlerOnProjectClose(@ExtraCfgWriter.OnProjectClose);
 end;
 
